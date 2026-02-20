@@ -336,7 +336,7 @@ public sealed partial class ParticleEffect : Component, Component.ExecuteInEdito
 	public List<GameObject> CollisionPrefab { get; set; }
 
 	/// <summary>
-	/// Will choose a random prefab to spawn from this list.
+	/// When true the collision prefab will be aligned with the surface it collides with.
 	/// </summary>
 	[Property, Feature( "Prefab" ), Title( "Align With Surface" )]
 	public bool CollisionPrefabAlign { get; set; }
