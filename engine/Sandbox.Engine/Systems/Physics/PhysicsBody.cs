@@ -1129,13 +1129,13 @@ public sealed partial class PhysicsBody : IHandle
 	/// Transform, on previous step
 	/// </summary>
 	Transform prevStepTransform;
-	float prevStepTime;
+	double prevStepTime;
 
 	/// <summary>
 	/// Transform on current step
 	/// </summary>
 	Transform stepTransform;
-	float stepTime;
+	double stepTime;
 
 
 	/// <summary>
@@ -1161,19 +1161,19 @@ public sealed partial class PhysicsBody : IHandle
 	/// When the physics world is run at a fixed timestep, getting the positions of bodies will not be smooth.
 	/// You can use this function to get the lerped position between steps, to make things super awesome.
 	/// </summary>
-	public Transform GetLerpedTransform( float time )
+	public Transform GetLerpedTransform( double time )
 	{
 		if ( stepTime == 0 )
 			return Transform;
 
 		// lerp gap is too big
-		if ( stepTime - prevStepTime > 0.5f )
+		if ( stepTime - prevStepTime > 0.5d )
 			return Transform;
 
 		time -= World.CurrentDelta;
 
-		var delta = MathX.Remap( time, prevStepTime, stepTime, 0.0f, 1.0f );
-		return Transform.Lerp( prevStepTransform, stepTransform, delta, true );
+		var delta = time.Remap( prevStepTime, stepTime );
+		return Transform.Lerp( prevStepTransform, stepTransform, (float)delta, true );
 	}
 
 	/// <summary>

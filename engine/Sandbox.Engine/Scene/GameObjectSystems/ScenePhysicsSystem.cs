@@ -78,7 +78,7 @@ sealed class ScenePhysicsSystem : GameObjectSystem<ScenePhysicsSystem>
 		}
 
 		// The actual physics step
-		Scene.PhysicsWorld.Step( Time.Now, Time.Delta, steps );
+		Scene.PhysicsWorld.Step( Time.NowDouble, Time.Delta, steps );
 
 		//
 		// Update the positions of the rigidbodies based on the new physics positions
