@@ -7,6 +7,8 @@ public abstract class GameMount : BaseGameMount
 
     public abstract IReadOnlyList<string> GameDirs { get; }
 
+    protected virtual string GetVpkPathPrefix( string dir ) => null;
+
     string appDir;
 
     readonly List<VpkLib.VpkArchive> vpkArchives = [];
@@ -52,58 +54,72 @@ public abstract class GameMount : BaseGameMount
             if ( !System.IO.Directory.Exists( root ) )
                 continue;
 
-            foreach ( var vpkPath in System.IO.Directory.GetFiles( root, "*_dir.vpk", SearchOption.TopDirectoryOnly ) )
-            {
-                try
-                {
-                    var vpk = new VpkLib.VpkArchive( vpkPath );
-                    if ( !vpk.IsValid )
-                    {
-                        vpk.Dispose();
-                        continue;
-                    }
-
-                    vpkArchives.Add( vpk );
-
-                    foreach ( var entry in vpk.Entries )
-                    {
-                        var ext = Path.GetExtension( entry.FullPath )?.ToLowerInvariant();
-                        if ( string.IsNullOrEmpty( ext ) ) continue;
-
-                        var path = $"{dir}/{entry.FullPath}";
-
-                        switch ( ext )
-                        {
-                            case ".wav": context.Add( ResourceType.Sound, path, new WavSoundLoader( dir, entry.FullPath ) ); break;
-                            case ".vtf": context.Add( ResourceType.Texture, path, new VtfTextureLoader( dir, entry.FullPath ) ); break;
-                        }
-                    }
-                }
-                catch ( System.Exception ex )
-                {
-                    Log.Warning( $"Failed to load VPK {vpkPath}: {ex.Message}" );
-                }
-            }
-
-            foreach ( var fullPath in System.IO.Directory.GetFiles( root, "*.*", SearchOption.AllDirectories ) )
-            {
-                var ext = Path.GetExtension( fullPath )?.ToLowerInvariant();
-                if ( string.IsNullOrEmpty( ext ) ) continue;
-                if ( ext == ".vpk" ) continue;
-
-                var relativePath = Path.GetRelativePath( root, fullPath ).Replace( '\\', '/' );
-                var path = $"{dir}/{relativePath}";
-
-                switch ( ext )
-                {
-                    case ".wav": context.Add( ResourceType.Sound, path, new WavSoundLoader( dir, relativePath ) ); break;
-                    case ".vtf": context.Add( ResourceType.Texture, path, new VtfTextureLoader( dir, relativePath ) ); break;
-                }
-            }
+            MountVpks( context, dir, root );
+            MountLooseFiles( context, dir, root );
         }
 
         IsMounted = true;
         return Task.CompletedTask;
+    }
+
+    void MountVpks( MountContext context, string dir, string root )
+    {
+        foreach ( var vpkPath in System.IO.Directory.GetFiles( root, "*_dir.vpk", SearchOption.TopDirectoryOnly ) )
+        {
+            try
+            {
+                var vpk = new VpkLib.VpkArchive( vpkPath );
+                if ( !vpk.IsValid )
+                {
+                    vpk.Dispose();
+                    continue;
+                }
+
+                var prefix = GetVpkPathPrefix( dir );
+                if ( prefix is not null )
+                    vpk.StripPathPrefix( prefix );
+
+                vpkArchives.Add( vpk );
+
+                foreach ( var entry in vpk.Entries )
+                {
+                    RegisterResource( context, dir, entry.FullPath );
+                }
+            }
+            catch ( System.Exception ex )
+            {
+                Log.Warning( $"Failed to load VPK {vpkPath}: {ex.Message}" );
+            }
+        }
+    }
+
+    void MountLooseFiles( MountContext context, string dir, string root )
+    {
+        foreach ( var fullPath in System.IO.Directory.GetFiles( root, "*.*", SearchOption.AllDirectories ) )
+        {
+            var ext = Path.GetExtension( fullPath )?.ToLowerInvariant();
+            if ( string.IsNullOrEmpty( ext ) || ext == ".vpk" )
+                continue;
+
+            var relativePath = Path.GetRelativePath( root, fullPath ).Replace( '\\', '/' );
+            RegisterResource( context, dir, relativePath );
+        }
+    }
+
+    void RegisterResource( MountContext context, string dir, string relativePath )
+    {
+        var ext = Path.GetExtension( relativePath )?.ToLowerInvariant();
+        if ( string.IsNullOrEmpty( ext ) )
+            return;
+
+        var path = $"{dir}/{relativePath}";
+
+        switch ( ext )
+        {
+            case ".wav": context.Add( ResourceType.Sound, path, new WavSoundLoader( dir, relativePath ) ); break;
+            case ".vtf": context.Add( ResourceType.Texture, path, new VtfTextureLoader( dir, relativePath ) ); break;
+            case ".vmt": context.Add( ResourceType.Material, path, new VmtMaterialLoader( dir, relativePath ) ); break;
+        }
     }
 }
 
@@ -113,6 +129,7 @@ public class AgeOfChivalryMount : GameMount
     public override string Title => "Age of Chivalry";
     public override long AppId => 17510;
     public override IReadOnlyList<string> GameDirs => ["vpks", "ageofchivalry"];
+    protected override string GetVpkPathPrefix( string dir ) => dir == "vpks" ? "hl2" : null;
 }
 
 public class AlienSwarmMount : GameMount
@@ -145,6 +162,7 @@ public class DIPRIPWarmUpMount : GameMount
     public override string Title => "D.I.P.R.I.P. Warm Up";
     public override long AppId => 17530;
     public override IReadOnlyList<string> GameDirs => ["vpks", "diprip"];
+    protected override string GetVpkPathPrefix( string dir ) => dir == "vpks" ? "hl2" : null;
 }
 
 public class DayOfDefeatSourceMount : GameMount
@@ -235,12 +253,13 @@ public class INFRAMount : GameMount
     public override IReadOnlyList<string> GameDirs => ["infra"];
 }
 
-public class INSURGENCYModernInfantryCombatMount : GameMount
+public class InsurgencyMount : GameMount
 {
     public override string Ident => "insurgency";
     public override string Title => "INSURGENCY: Modern Infantry Combat";
     public override long AppId => 17700;
     public override IReadOnlyList<string> GameDirs => ["vpks", "insurgency"];
+    protected override string GetVpkPathPrefix( string dir ) => dir == "vpks" ? "hl2" : null;
 }
 
 public class KlausVeensTreasonMount : GameMount

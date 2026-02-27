@@ -22,18 +22,18 @@ public class VpkArchive : IDisposable
     const ushort EmbeddedInDirFile = 0x7fff;
     const ushort EntryTerminator = 0xffff;
 
-    private readonly string _dirFilePath;
-    private readonly Dictionary<string, VpkEntry> _entryLookup = new( StringComparer.OrdinalIgnoreCase );
-    private readonly Dictionary<int, FileStream> _archiveStreams = [];
+    readonly string _dirFilePath;
+    readonly Dictionary<string, VpkEntry> _entryLookup = new( StringComparer.OrdinalIgnoreCase );
+    readonly Dictionary<int, FileStream> _archiveStreams = [];
+
+    int DirectorySize;
+    int EmbeddedDataOffset;
 
     public string BaseName { get; private set; }
     public string Directory { get; private set; }
     public int Version { get; private set; }
     public List<VpkEntry> Entries { get; private set; } = [];
     public bool IsValid { get; private set; }
-
-    int DirectorySize;
-    int EmbeddedDataOffset;
 
     public VpkArchive( string dirFilePath )
     {
@@ -56,7 +56,74 @@ public class VpkArchive : IDisposable
         }
     }
 
-    private void ReadDirectory()
+    public void StripPathPrefix( string prefix )
+    {
+        if ( string.IsNullOrEmpty( prefix ) || Entries.Count == 0 )
+            return;
+
+        var prefixWithSlash = prefix + "/";
+        var prefixLen = prefixWithSlash.Length;
+
+        _entryLookup.Clear();
+
+        foreach ( var entry in Entries )
+        {
+            if ( entry.FullPath.StartsWith( prefixWithSlash, StringComparison.OrdinalIgnoreCase ) )
+                entry.FullPath = entry.FullPath[prefixLen..];
+
+            _entryLookup[entry.FullPath] = entry;
+        }
+    }
+
+    public bool FileExists( string path ) => _entryLookup.ContainsKey( path );
+
+    public VpkEntry FindEntry( string path ) => _entryLookup.TryGetValue( path, out var entry ) ? entry : null;
+
+    public byte[] GetFileBytes( string path )
+    {
+        var entry = FindEntry( path );
+        if ( entry is null )
+            return null;
+
+        var data = new byte[entry.TotalSize];
+        var offset = 0;
+
+        if ( entry.PreloadData is not null && entry.PreloadBytes > 0 )
+        {
+            Array.Copy( entry.PreloadData, 0, data, 0, entry.PreloadBytes );
+            offset += entry.PreloadBytes;
+        }
+
+        if ( entry.EntryLength > 0 )
+        {
+            var stream = GetArchiveStream( entry.ArchiveIndex );
+            if ( stream is null )
+                return null;
+
+            var seekOffset = entry.ArchiveIndex == EmbeddedInDirFile
+                ? EmbeddedDataOffset + entry.EntryOffset
+                : entry.EntryOffset;
+
+            lock ( stream )
+            {
+                stream.Seek( seekOffset, SeekOrigin.Begin );
+                stream.ReadExactly( data, offset, (int)entry.EntryLength );
+            }
+        }
+
+        return data;
+    }
+
+    public void Dispose()
+    {
+        foreach ( var stream in _archiveStreams.Values )
+            stream?.Dispose();
+
+        _archiveStreams.Clear();
+        GC.SuppressFinalize( this );
+    }
+
+    void ReadDirectory()
     {
         using var stream = File.OpenRead( _dirFilePath );
         using var reader = new BinaryReader( stream, Encoding.ASCII );
@@ -99,7 +166,7 @@ public class VpkArchive : IDisposable
         ReadTree( reader );
     }
 
-    private void ReadTree( BinaryReader reader )
+    void ReadTree( BinaryReader reader )
     {
         while ( true )
         {
@@ -146,7 +213,7 @@ public class VpkArchive : IDisposable
         }
     }
 
-    private static string ReadNullTerminatedString( BinaryReader reader )
+    static string ReadNullTerminatedString( BinaryReader reader )
     {
         var sb = new StringBuilder();
 
@@ -160,52 +227,7 @@ public class VpkArchive : IDisposable
         return sb.ToString();
     }
 
-    public bool FileExists( string path )
-    {
-        return _entryLookup.ContainsKey( path );
-    }
-
-    public VpkEntry FindEntry( string path )
-    {
-        return _entryLookup.TryGetValue( path, out var entry ) ? entry : null;
-    }
-
-    public byte[] GetFileBytes( string path )
-    {
-        var entry = FindEntry( path );
-        if ( entry is null )
-            return null;
-
-        var data = new byte[entry.TotalSize];
-        var offset = 0;
-
-        if ( entry.PreloadData is not null && entry.PreloadBytes > 0 )
-        {
-            Array.Copy( entry.PreloadData, 0, data, 0, entry.PreloadBytes );
-            offset += entry.PreloadBytes;
-        }
-
-        if ( entry.EntryLength > 0 )
-        {
-            var stream = GetArchiveStream( entry.ArchiveIndex );
-            if ( stream is null )
-                return null;
-
-            var seekOffset = entry.ArchiveIndex == EmbeddedInDirFile
-                ? EmbeddedDataOffset + entry.EntryOffset
-                : entry.EntryOffset;
-
-            lock ( stream )
-            {
-                stream.Seek( seekOffset, SeekOrigin.Begin );
-                stream.ReadExactly( data, offset, (int)entry.EntryLength );
-            }
-        }
-
-        return data;
-    }
-
-    private FileStream GetArchiveStream( int archiveIndex )
+    FileStream GetArchiveStream( int archiveIndex )
     {
         if ( _archiveStreams.TryGetValue( archiveIndex, out var existing ) )
             return existing;
@@ -220,14 +242,5 @@ public class VpkArchive : IDisposable
         var stream = new FileStream( archivePath, FileMode.Open, FileAccess.Read, FileShare.Read );
         _archiveStreams[archiveIndex] = stream;
         return stream;
-    }
-
-    public void Dispose()
-    {
-        foreach ( var stream in _archiveStreams.Values )
-            stream?.Dispose();
-
-        _archiveStreams.Clear();
-        GC.SuppressFinalize( this );
     }
 }
