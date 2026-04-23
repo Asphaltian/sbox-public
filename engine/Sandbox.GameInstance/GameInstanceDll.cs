@@ -1,8 +1,8 @@
 ﻿using Microsoft.CodeAnalysis.CSharp;
-using Sandbox.ActionGraphs;
 using Sandbox.Audio;
 using Sandbox.Diagnostics;
 using Sandbox.Internal;
+using Sandbox.Modals;
 using Sandbox.UI;
 using Sandbox.Utility;
 using Sandbox.VR;
@@ -21,6 +21,7 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 	PackageLoader.Enroller AssemblyEnroller { get; set; }
 
 	private bool _isAssemblyLoadingPaused;
+	private CancellationTokenSource _loadGameCts;
 
 	public void Bootstrap()
 	{
@@ -54,15 +55,15 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 			if ( Application.IsStandalone )
 			{
 				// In standalone, we don't ship code - only assets
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, $"/base/assets" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, $"/base/Assets" );
 				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Root, "/core/" );
 			}
 			else
 			{
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/assets/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/Assets/" );
 				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/code/" );
 				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Root, "/core/" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/citizen/assets/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/citizen/Assets/" );
 			}
 		}
 
@@ -89,6 +90,15 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 
 		Event.Run( "app.exit" );
 		Game.Cookies?.Save();
+
+		// Release InputContext references so the UISystem/PanelRenderer
+		// chain (and any RenderAttributes it holds) can be collected.
+		if ( InputContext is not null )
+		{
+			InputContext.KeyboardFocusPanel = null;
+			InputContext.MouseFocusPanel = null;
+			InputContext = null;
+		}
 	}
 
 	static int Counter;
@@ -115,7 +125,10 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 	/// </summary>
 	public void ResetEnvironment()
 	{
+		using var scope = GlobalContext.GameScope();
+
 		Log.Trace( "Game Menu - ResetEnvironment" );
+
 
 		// Use a new package loader for every game if we're not in editor
 		// The editor is only going to load 1 game and ToolsDll has a reference to it
@@ -137,7 +150,7 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 			DidMountNetworkedFiles = false;
 		}
 
-		FontManager.Instance.Reset();
+		FontManager.Instance.Clear( false );
 		FontManager.Instance.LoadAll( FileSystem.Mounted );
 
 		AssemblyEnroller?.Dispose();
@@ -146,6 +159,7 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		CodeArchiveTable.Reset();
 		NetworkedSmallFiles.Reset();
 		NetworkedConfigFiles.Reset();
+		NetworkedLangFiles.Reset();
 		NetworkedLargeFiles.Reset();
 		ReplicatedConvars.Reset();
 		ServerPackages.Clear();
@@ -160,7 +174,7 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		UserPermission.Load();
 
 		Input.ReadConfig( null );
-		StyleSheet.InitStyleSheets();
+		StyleSheet.ResetStyleSheets();
 		Networking.Reset();
 		Connection.Reset();
 		GlobalContext.Current.Reset();
@@ -357,7 +371,11 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 
 	public void CloseGame()
 	{
+		CancelLoad();
+
 		if ( gameInstance is null ) return;
+
+		using var scope = GlobalContext.GameScope();
 
 		ConVarSystem.SaveAll();
 
@@ -378,8 +396,6 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		Sound.StopAll( 0.2f );
 
 		ResetEnvironment();
-
-		IMenuDll.Current?.OnGameExited();
 
 		Mounting.MountUtility.TickPreviewRenders();
 	}
@@ -473,8 +489,6 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		if ( activeScene is null ) return;
 		if ( Networking.IsConnecting ) return;
 
-		LoadingScreen.IsVisible = activeScene.IsLoading;
-
 		activeScene.GameTick( 0 ); // we already advanced time 
 
 		// Run any pending queue'd mainthread tasks here
@@ -504,9 +518,28 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		BasePopup.CloseAll( panelClickedOn as Panel );
 	}
 
-	public void Disconnect()
+	public void Disconnect( string message = null )
 	{
+		// cancel any in-progress load right now instead of waiting for tick
+		CancelLoad();
 		Game.Close();
+
+		if ( !string.IsNullOrEmpty( message ) )
+		{
+			using var scope = GlobalContext.MenuScope();
+			IModalSystem.Current.Notice( "Disconnected", message, "wifi_off" );
+
+			Log.Warning( $"Disconnected: {message.Replace( "\n", "" )}" );
+		}
+
+		LoadingScreen.IsVisible = false;
+	}
+
+	private void CancelLoad()
+	{
+		_loadGameCts?.Cancel();
+		_loadGameCts?.Dispose();
+		_loadGameCts = null;
 	}
 
 	/// <summary>
@@ -517,19 +550,35 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 		try
 		{
 			ThreadSafe.AssertIsMainThread();
-			await LoadGamePackageAsyncInternal( ident, flags, ct );
+
+			_loadGameCts?.Cancel();
+			_loadGameCts?.Dispose();
+			_loadGameCts = CancellationTokenSource.CreateLinkedTokenSource( ct );
+
+			await LoadGamePackageAsyncInternal( ident, flags, _loadGameCts.Token );
 		}
 		catch ( System.Exception e )
 		{
-			LoadingScreen.IsVisible = false;
-			LoadingScreen.Media = null;
+			ResetEnvironment();
 
-			using ( IMenuDll.Current?.PushScope() )
+			if ( e is not OperationCanceledException )
 			{
-				IMenuSystem.Current?.Popup( "error", "Loading Error", $"There was an error when loading this game. {e.Message}" );
+				using ( IMenuDll.Current?.PushScope() )
+				{
+					IModalSystem.Current?.Notice( "Loading Error", $"An error occurred when loading this game.\n\n{e.Message}", "error" );
+				}
+
+				Log.Warning( e, e.Message );
+
+				if ( Application.IsEditor )
+				{
+					// raise in editor, load has failed and we should alert the user
+					throw;
+				}
 			}
 
-			Log.Warning( e, e.Message );
+			LoadingScreen.IsVisible = false;
+			LoadingScreen.Media = null;
 		}
 	}
 
@@ -609,12 +658,10 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 
 			if ( !await newInstance.LoadAsync( AssemblyEnroller, ct ) )
 			{
-				ResetEnvironment();
-				newInstance.Close();
-				newInstance.Shutdown();
-				newInstance = default;
+				if ( ct.IsCancellationRequested )
+					return;
 
-				throw new System.Exception( "Loading failed." );
+				throw new Exception( "GameInstance load failed" );
 			}
 
 			if ( ct.IsCancellationRequested )
@@ -658,10 +705,7 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 			{
 				if ( !gameInstance.OpenStartupScene() )
 				{
-					ResetEnvironment();
-					LoadingScreen.IsVisible = false;
-					LoadingScreen.Media = null;
-					return;
+					throw new Exception( "Failed to load startup scene" );
 				}
 			}
 
@@ -686,6 +730,8 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 			// Loading failed
 			if ( newInstance is not null )
 			{
+				using var _ = GlobalContext.GameScope();
+
 				newInstance.Close();
 				newInstance.Shutdown();
 				newInstance = default;
@@ -845,8 +891,11 @@ internal partial class GameInstanceDll : Engine.IGameInstanceDll
 			Log.Info( $" with map: '{LaunchArguments.Map}'" );
 		}
 
-		await IGameInstanceDll.Current.LoadGamePackageAsync( gameIdent, GameLoadingFlags.Host, default );
-		Log.Info( $"Load Complete" );
+		LoadingScreen.IsVisible = true;
+		LoadingScreen.Media = null;
+		LoadingScreen.Title = null;
+
+		await Current.LoadGamePackageAsync( gameIdent, GameLoadingFlags.Host, default );
 	}
 
 	public static void Create()

@@ -169,32 +169,30 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 		return lobby;
 	}
 
-	public static async Task<SteamLobbySocket> Join( ulong lobbyId )
+	public static async Task<(RoomEnter Response, SteamLobbySocket Socket)> Join( ulong lobbyId )
 	{
-		var steamlobby = await SteamMatchmaking.JoinLobbyAsync( lobbyId );
-
-		if ( !steamlobby.HasValue )
+		var result = await SteamMatchmaking.JoinLobbyAsync( lobbyId );
+		if ( result.Response != RoomEnter.Success || result.Lobby is not { } lobby )
 		{
-			Log.Warning( "Error joining lobby!" );
-			return null;
+			return (result.Response, null);
 		}
 
 		for ( int i = 0; i < 200; i++ )
 		{
-			if ( LobbyManager.ActiveLobbies.Contains( steamlobby.Value.Id ) )
+			if ( LobbyManager.ActiveLobbies.Contains( lobby.Id ) )
 				break;
 
 			await Task.Delay( 10 );
 		}
 
-		if ( !LobbyManager.ActiveLobbies.Contains( steamlobby.Value.Id ) )
+		if ( !LobbyManager.ActiveLobbies.Contains( lobby.Id ) )
 		{
 			Log.Warning( "Didn't enter lobby in a reasonable time!" );
-			steamlobby.Value.Leave();
-			return null;
+			lobby.Leave();
+			return default;
 		}
 
-		var lobby = new SteamLobbySocket( steamlobby.Value );
+		var socket = new SteamLobbySocket( lobby );
 		var timeout = Stopwatch.StartNew();
 
 		// Wait 2000ms for a host or time out
@@ -202,14 +200,14 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 		{
 			SteamNetwork.RunCallbacks();
 
-			if ( lobby.hostConnection is not null )
-				return lobby;
+			if ( socket.hostConnection is not null )
+				return (result.Response, socket);
 
 			await Task.Delay( 100 );
 		}
 
-		Log.Warning( $"Timed out connecting to lobby {steamlobby.Value}" );
-		return null;
+		Log.Warning( $"Timed out connecting to lobby." );
+		return default;
 	}
 
 	internal override void Initialize( NetworkSystem networkSystem )
@@ -308,18 +306,20 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 	/// <param name="channel"></param>
 	private unsafe void ProcessIncomingMessages( in ISteamNetworkingMessages net, int channel )
 	{
-		var ptr = stackalloc IntPtr[Networking.MaxIncomingMessages];
+		var ptr = stackalloc IntPtr[Networking.ReceiveBatchSize];
+		var maxIncoming = Networking.ReceiveBatchSizePerTick;
+		var totalReceived = 0;
 
 		while ( true )
 		{
-			var count = net.ReceiveMessagesOnChannel( channel, (IntPtr)ptr, Networking.MaxIncomingMessages );
+			var count = net.ReceiveMessagesOnChannel( channel, (IntPtr)ptr, Networking.ReceiveBatchSize );
 			if ( count == 0 ) return;
 
 			for ( var i = 0; i < count; i++ )
 			{
 				var msg = Unsafe.Read<SteamNetworkMessage>( (void*)ptr[i] );
 
-				var data = new byte[msg.Size];
+				var data = GC.AllocateUninitializedArray<byte>( msg.Size );
 				Marshal.Copy( (IntPtr)msg.Data, data, 0, data.Length );
 
 				var m = new IncomingMessage
@@ -331,6 +331,11 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 				IncomingMessages.Writer.TryWrite( m );
 				net.ReleaseMessage( ptr[i] );
 			}
+
+			totalReceived += count;
+
+			if ( maxIncoming > 0 && totalReceived >= maxIncoming )
+				return;
 		}
 	}
 
@@ -364,9 +369,15 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 		var net = Steam.SteamNetworkingMessages();
 		if ( !net.IsValid ) return;
 
+		var maxOutgoing = Networking.MaxOutgoingMessagesPerTick;
+		var outgoingCount = 0;
+
 		while ( OutgoingMessages.Reader.TryRead( out var msg ) )
 		{
 			ProcessOutgoingMessage( net, msg );
+
+			if ( maxOutgoing > 0 && ++outgoingCount >= maxOutgoing )
+				break;
 		}
 
 		ProcessIncomingMessages( net, NetworkChannel );
@@ -379,18 +390,7 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 			if ( !Connections.TryGetValue( msg.SteamId, out var connection ) )
 				continue;
 
-			Span<byte> data = Networking.DecodeStream( msg.Data );
-
-			using var stream = ByteStream.CreateReader( data );
-
-			var nwm = new NetworkSystem.NetworkMessage
-			{
-				Data = stream,
-				Source = connection
-			};
-
-			connection.MessagesRecieved++;
-			handler( nwm );
+			connection.OnRawPacketReceived( msg.Data, handler );
 		}
 	}
 
@@ -725,17 +725,15 @@ internal class SteamLobbySocket : NetworkSocket, ILobby
 		//
 		if ( SteamLobby.GetData( "toxic" ) == "1" )
 		{
-			IGameInstanceDll.Current.Disconnect();
-			IMenuSystem.ShowServerError( "Disconnected", "Inoperable Server State" );
-			Log.Warning( "Disconnecting - Inoperable Server State" );
+			Networking.Disconnect();
+			IGameInstanceDll.Current.Disconnect( "Inoperable Server State" );
 			return;
 		}
 
 		if ( SteamLobby.GetData( "disbanded" ) == "1" )
 		{
-			IGameInstanceDll.Current.Disconnect();
-			IMenuSystem.ShowServerError( "Disconnected", "Lobby Disbanded" );
-			Log.Warning( "Disconnecting - Lobby Disbanded" );
+			Networking.Disconnect();
+			IGameInstanceDll.Current.Disconnect( "Lobby Disbanded" );
 			return;
 		}
 

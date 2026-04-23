@@ -62,15 +62,15 @@ internal sealed class MenuDll : IMenuDll
 			{
 				// No menu or citizen addon in standalone
 				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, $"/base/code" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, $"/base/assets" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, $"/base/Assets" );
 			}
 			else
 			{
 				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/code/" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/assets/" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/menu/code/" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/menu/assets/" );
-				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/citizen/assets/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/base/Assets/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/menu/Code/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/menu/Assets/" );
+				FileSystem.Mounted.CreateAndMount( EngineFileSystem.Addons, "/citizen/Assets/" );
 			}
 
 			FileSystem.Mounted.CreateAndMount( EngineFileSystem.Root, "/core/" );
@@ -80,13 +80,8 @@ internal sealed class MenuDll : IMenuDll
 		//
 		// Localization from menu 
 		//
-		{
-			var localizationFolder = new AggregateFileSystem();
-			localizationFolder.CreateAndMount( EngineFileSystem.Addons, "/menu/localization/" );
-
-			Game.Language = new LanguageContainer( localizationFolder );
-		}
-
+		Game.Language = new LanguageContainer();
+		Game.Language.FileSystem.CreateAndMount( EngineFileSystem.Addons, "/menu/localization/" );
 
 
 		//
@@ -138,7 +133,7 @@ internal sealed class MenuDll : IMenuDll
 		// LoopEvent.Init
 		//
 		{
-			StyleSheet.InitStyleSheets();
+			StyleSheet.ResetStyleSheets();
 			GlobalContext.Current.Reset();
 		}
 
@@ -241,6 +236,15 @@ internal sealed class MenuDll : IMenuDll
 
 			// Expire async context to prevent lingering tasks
 			AsyncContext.Expire( null );
+
+			// Release panel references held by input context — these keep
+			// the entire menu panel tree (and its TextBlock textures) alive.
+			if ( InputContext is not null )
+			{
+				InputContext.KeyboardFocusPanel = null;
+				InputContext.MouseFocusPanel = null;
+				InputContext = null;
+			}
 
 			// Clear global context
 			GlobalContext.Current.Reset();

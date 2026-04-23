@@ -17,13 +17,16 @@ namespace Editor
 			Singleton = this;
 			DeleteOnClose = true;
 
+			WindowTitle = "Opening s&box Editor";
+			SetWindowIcon( Pixmap.FromFile( "logo_rounded.png" ) );
 			BackgroundImage = LoadSplashImage();
 
 			// load any saved geometry
 			string geometryCookie = EditorCookie.GetString( "splash.geometry", null );
 			RestoreGeometry( geometryCookie );
 
-			Size = new( 700, 400 + InfoAreaHeight );
+			var aspect = (float)BackgroundImage.Height / BackgroundImage.Width;
+			Size = new( 700, (700 * aspect).FloorToInt() + InfoAreaHeight );
 
 			if ( geometryCookie is null )
 			{
