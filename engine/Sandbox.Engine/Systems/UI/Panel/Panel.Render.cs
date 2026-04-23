@@ -1,4 +1,5 @@
-﻿using Sandbox.Rendering;
+using Sandbox.Engine;
+using Sandbox.Rendering;
 
 namespace Sandbox.UI;
 
@@ -7,68 +8,69 @@ public partial class Panel
 	internal BlendMode BackgroundBlendMode;
 
 	internal bool IsRenderDirty = true;
-	internal readonly CommandList CommandList = new();
-	internal readonly CommandList ClipCommandList = new(); // Don't execute directly - save off to this and then combine into main command list during rendering
-	internal readonly CommandList TransformCommandList = new(); // Stores TransformMat attribute, combined into main command list
-	internal readonly CommandList LayerCommandList = new(); // For post-children layer drawing (filters, masks, etc.)
+	internal readonly CommandList LayerCommandList;
 
-	internal virtual void DrawContent( CommandList commandList, PanelRenderer renderer, ref RenderState state )
+	internal int _lastScissorHash;
+	internal Matrix? _lastLayerMatrix;
+
+	internal enum RenderMode : byte { Inline, Batched, Layer }
+
+	internal RenderLayer CachedDescriptors;
+	internal RenderMode CachedRenderMode;
+	internal float CachedRenderOpacity = 1.0f;
+	internal BlendMode CachedOverrideBlendMode = BlendMode.Normal;
+
+	public void MarkRenderDirty()
 	{
-		BuildContentCommandList( commandList, ref state );
+		IsRenderDirty = true;
 	}
 
 	/// <summary>
-	/// Called when <see cref="HasContent"/> is set to <see langword="true"/> to custom draw the panels content.
+	/// Override this to draw custom graphics for this panel using the <see cref="Draw"/> API.
+	/// <example>
+	/// <code>
+	/// public override void OnDraw()
+	/// {
+	///     var r = Box.RectInner;
+	///     Draw.Rect( r, Color.Blue.WithAlpha( 0.2f ), cornerRadius: 4 );
+	///     Draw.Text( "Score: 100", r, 16, Color.White, TextFlag.Center );
+	/// }
+	/// </code>
+	/// </example>
 	/// </summary>
+	public virtual void OnDraw()
+	{
+	}
+
+	[Obsolete( "Use Draw" )]
 	public virtual void BuildContentCommandList( CommandList commandList, ref RenderState state )
 	{
-		// nothing by default
 	}
 
+	[Obsolete( "Use Draw" )]
 	public virtual void BuildCommandList( CommandList commandList )
 	{
-		// nothing by default
 	}
 
-	/// <summary>
-	/// Called to draw the panels background.
-	/// </summary>
-	[Obsolete( "Use BuildCommandList" )]
-	public virtual void DrawBackground( ref RenderState state )
-	{
-		// nothing by default
-	}
-
-	/// <summary>
-	/// Called when <see cref="HasContent"/> is set to <see langword="true"/> to custom draw the panels content.
-	/// </summary>
-	[Obsolete( "Use BuildContentCommandList" )]
+	[Obsolete( "Use Draw" )]
 	public virtual void DrawContent( ref RenderState state )
 	{
-		// nothing by default
 	}
 
-	internal void RenderChildren( PanelRenderer render, ref RenderState state )
+	[Obsolete( "Use Draw" )]
+	public virtual void DrawBackground( ref RenderState state )
 	{
-		if ( _renderChildrenDirty )
-		{
-			_renderChildren.Sort( ( x, y ) => x.GetRenderOrderIndex() - y.GetRenderOrderIndex() );
-			_renderChildrenDirty = false;
-		}
+	}
 
-		// Render Children
-		{
-			for ( int i = 0; i < _renderChildren.Count; i++ )
-			{
-				render.Render( _renderChildren[i], state );
-			}
-		}
+	[Obsolete( "Use Draw" )]
+	internal virtual void DrawContent( PanelRenderer renderer, ref RenderState state )
+	{
 	}
 
 	/// <summary>
-	/// Build command lists for all children. Called during tick phase.
+	/// Build descriptors for all children. Called during tick phase.
 	/// </summary>
-	internal void BuildCommandListsForChildren( PanelRenderer render, ref RenderState state )
+	internal void BuildDescriptorsForChildren( PanelRenderer render, ref RenderState state )
 	{
 		using var _ = render.Clip( this );
 
@@ -80,7 +82,8 @@ public partial class Panel
 
 		for ( int i = 0; i < _renderChildren.Count; i++ )
 		{
-			render.BuildCommandLists( _renderChildren[i], state );
+			render.BuildDescriptors( _renderChildren[i], state );
 		}
 	}
+
 }

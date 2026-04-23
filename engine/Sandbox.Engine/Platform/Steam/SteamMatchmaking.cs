@@ -37,14 +37,15 @@ internal class SteamMatchmaking : SteamClientClass<SteamMatchmaking>
 	/// <summary>
 	/// Attempts to directly join the specified lobby
 	/// </summary>
-	internal static async Task<Lobby?> JoinLobbyAsync( SteamId lobbyId )
+	internal static async Task<(RoomEnter Response, Lobby? Lobby)> JoinLobbyAsync( SteamId lobbyId )
 	{
 		Assert.NotNull( Internal );
 
 		var lobby = await Internal.JoinLobby( lobbyId );
-		if ( !lobby.HasValue ) return null;
+		if ( !lobby.HasValue ) return ((RoomEnter)lobby.Value.EChatRoomEnterResponse, null);
 
-		return new Lobby { Id = lobby.Value.SteamIDLobby };
+		return ((RoomEnter)lobby.Value.EChatRoomEnterResponse,
+			new Lobby { Id = lobby.Value.SteamIDLobby });
 	}
 
 }

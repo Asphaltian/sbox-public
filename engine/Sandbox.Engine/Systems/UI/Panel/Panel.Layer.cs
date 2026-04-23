@@ -2,29 +2,14 @@ using Sandbox.Rendering;
 
 namespace Sandbox.UI;
 
-internal class PanelLayer : IDisposable
-{
-	public Vector2 Size { get; set; }
-	public Texture Texture { get; set; }
-
-	public PanelLayer( Vector2 size )
-	{
-		Size = size;
-		Texture = Texture.CreateRenderTarget()
-								.WithSize( Size )
-								.Create();
-	}
-
-	public void Dispose()
-	{
-		Texture?.Dispose();
-		Texture = null;
-	}
-}
-
 public partial class Panel
 {
-	PanelLayer PanelLayer;
+	string PanelLayerRTName => field ??= $"PanelLayer.{GetHashCode()}";
+
+	Vector2? _panelLayerSize;
+
+	// Cached layer state computed during Build for use during Gather
+	internal Matrix? CachedLayerMatrix;
 
 	bool NeedsLayer( Styles styles )
 	{
@@ -44,19 +29,11 @@ public partial class Panel
 			if ( size.x <= 1 ) return;
 			if ( size.y <= 1 ) return;
 
-			// TODO - add blur size margin
-			if ( PanelLayer != null && PanelLayer.Size == size )
-				return;
-
-			PanelLayer?.Dispose();
-			PanelLayer = null;
-
-			PanelLayer = new PanelLayer( size );
+			_panelLayerSize = size;
 		}
 		else
 		{
-			PanelLayer?.Dispose();
-			PanelLayer = null;
+			_panelLayerSize = null;
 		}
 	}
 
@@ -65,59 +42,104 @@ public partial class Panel
 	/// </summary>
 	internal void PushLayer( PanelRenderer render )
 	{
-		if ( PanelLayer == null ) return;
-		if ( ComputedStyle == null ) return;
+		if ( _panelLayerSize is null ) return;
+		if ( ComputedStyle is null ) return;
 		if ( !IsVisible ) return;
 
-		// we need to push a matrix to offset the panel position,
-		// so we're drawing in the correct place
 		var mat = render.Matrix.Inverted;
 		mat *= Matrix.CreateTranslation( Box.RectOuter.Position * -1.0f );
 
-		render.PushLayer( this, PanelLayer.Texture, mat );
+		// Store state for gather phase
+		CachedLayerMatrix = mat;
+		_lastLayerMatrix = GlobalMatrix;
+		GlobalMatrix = null;
+	}
+
+	/// <summary>
+	/// Called during Gather phase — push RT on the global command list.
+	/// </summary>
+	internal void PushLayerGather( PanelRenderer render, CommandList globalCL )
+	{
+		if ( _panelLayerSize is null ) return;
+		if ( CachedLayerMatrix is null ) return;
+
+		// Set identity transform for layer content
+		globalCL.Attributes.Set( "TransformMat", Matrix.Identity );
+
+		var handle = globalCL.GetRenderTarget( PanelLayerRTName, (int)_panelLayerSize.Value.x, (int)_panelLayerSize.Value.y, depthFormat: ImageFormat.None );
+
+		render.PushLayer( this, globalCL, handle, CachedLayerMatrix.Value );
 	}
 
 	/// <summary>
 	/// Build commands for post-children layer drawing (filters, masks, etc.)
-	/// These commands go into LayerCommandList and are executed after children.
+	/// Called during Build phase after children are processed.
+	/// LayerStack is maintained during Build so PopLayer can set correct state.
 	/// </summary>
 	internal void BuildLayerPopCommands( PanelRenderer render, RenderTarget defaultRenderTarget )
 	{
-		if ( PanelLayer == null ) return;
-		if ( ComputedStyle == null ) return;
+		// Restore layer transform
+		if ( _lastLayerMatrix.HasValue )
+		{
+			GlobalMatrix = _lastLayerMatrix;
+			_lastLayerMatrix = null;
+		}
+
+		if ( _panelLayerSize is null ) return;
+		if ( ComputedStyle is null ) return;
 		if ( !IsVisible ) return;
 
 		LayerCommandList.Reset();
 
-		// Restore render target (pop from layer stack)
-		render.PopLayer( this, LayerCommandList, defaultRenderTarget );
+		// Find parent layer's matrix by walking up the tree.
+		// If no parent layer, use Identity.
+		// RT is set during Draw via PopLayer on the global CL — don't set it here,
+		// or it would override the parent layer's RT for nested layers.
+		var parentLayerMat = Matrix.Identity;
+		var isWorld = false;
+		var ancestor = Parent;
+		while ( ancestor != null )
+		{
+			if ( ancestor.HasPanelLayer && ancestor.CachedLayerMatrix.HasValue )
+			{
+				parentLayerMat = ancestor.CachedLayerMatrix.Value;
+				break;
+			}
+			ancestor = ancestor.Parent;
+		}
+		isWorld = render.IsWorldPanel( this );
 
-		LayerCommandList.InsertList( TransformCommandList );
-		LayerCommandList.InsertList( ClipCommandList );
+		LayerCommandList.Attributes.Set( "LayerMat", parentLayerMat );
+		LayerCommandList.Attributes.SetCombo( "D_WORLDPANEL", isWorld ? 1 : 0 );
 
-		var attributes = LayerCommandList.Attributes;
+		// Apply transform/scissor from cached descriptor state
+		LayerCommandList.Attributes.Set( "TransformMat", CachedDescriptors.TransformMat );
+		PanelRenderer.SetScissorAttributes( LayerCommandList, CachedDescriptors.Scissor );
+
+		BuildLayerPopCommandsInto( render, LayerCommandList );
+	}
+
+	private void BuildLayerPopCommandsInto( PanelRenderer render, CommandList commandList )
+	{
+		var attributes = commandList.Attributes;
 
 		//
 		// Shared attributes
 		//
-		attributes.Set( "Texture", PanelLayer.Texture );
+		attributes.Set( "Texture", new RenderTargetHandle { Name = PanelLayerRTName }.ColorTexture );
 		attributes.Set( "BoxPosition", Box.RectOuter.Position );
 		attributes.Set( "BoxSize", Box.RectOuter.Size );
 
 		//
 		// Pre-filter: draw shadows and border before everything else as separate layers
 		//
-		DrawPreFilterShadows();
-		DrawPreFilterBorder();
-		ResetPrefilterAttributes();
+		DrawPreFilterShadows( commandList );
+		DrawPreFilterBorder( commandList );
+		ResetPrefilterAttributes( commandList );
 
-		//
-		// Draw this panel, with filters
-		//
-		// Todo, awesome, smooth, multipass blur
 		float blurSize = ComputedStyle.FilterBlur.Value.GetPixels( 1.0f );
-		attributes.Set( "FilterBlur", blurSize );
 
+		attributes.Set( "FilterBlur", blurSize );
 		attributes.Set( "FilterSaturate", ComputedStyle.FilterSaturate.Value.GetFraction( 1.0f ) );
 		attributes.Set( "FilterSepia", ComputedStyle.FilterSepia.Value.GetFraction( 1.0f ) );
 		attributes.Set( "FilterBrightness", ComputedStyle.FilterBrightness.Value.GetPixels( 1.0f ) );
@@ -193,13 +215,13 @@ public partial class Panel
 		}
 
 		attributes.SetCombo( "D_BLENDMODE", render.OverrideBlendMode );
-		LayerCommandList.DrawQuad( Box.RectOuter.Grow( growSize ).Ceiling(), Material.UI.Filter, Color.White );
+		commandList.DrawQuad( Box.RectOuter.Grow( growSize ).Ceiling(), Material.UI.Filter, Color.White );
 	}
 
 	/// <summary>
-	/// Draws shadows for the current layer
+	/// Draws shadows for the current layer into the specified command list.
 	/// </summary>
-	private void DrawPreFilterShadows()
+	private void DrawPreFilterShadows( CommandList commandList )
 	{
 		foreach ( var shadow in ComputedStyle.FilterDropShadow )
 		{
@@ -213,21 +235,21 @@ public partial class Panel
 			growSize *= MathF.Max( 1.0f, shadow.Blur * 2.0f );
 			outerRect = outerRect.Grow( growSize );
 
-			ResetPrefilterAttributes();
+			ResetPrefilterAttributes( commandList );
 
-			LayerCommandList.Attributes.Set( "FilterDropShadowScale", Box.RectOuter.Size / outerRect.Size );
-			LayerCommandList.Attributes.Set( "FilterDropShadowOffset", shadowSize );
-			LayerCommandList.Attributes.Set( "FilterDropShadowBlur", shadow.Blur );
-			LayerCommandList.Attributes.Set( "FilterDropShadowColor", shadow.Color );
+			commandList.Attributes.Set( "FilterDropShadowScale", Box.RectOuter.Size / outerRect.Size );
+			commandList.Attributes.Set( "FilterDropShadowOffset", shadowSize );
+			commandList.Attributes.Set( "FilterDropShadowBlur", shadow.Blur );
+			commandList.Attributes.Set( "FilterDropShadowColor", shadow.Color );
 
-			LayerCommandList.DrawQuad( outerRect, Material.UI.DropShadow, Color.White );
+			commandList.DrawQuad( outerRect, Material.UI.DropShadow, Color.White );
 		}
 	}
 
 	/// <summary>
-	/// Draws borders for the current layer
+	/// Draws borders for the current layer into the specified command list.
 	/// </summary>
-	private void DrawPreFilterBorder()
+	private void DrawPreFilterBorder( CommandList commandList )
 	{
 		float filterBorderWidth = ComputedStyle.FilterBorderWidth.Value.GetPixels( 1.0f );
 		filterBorderWidth *= ScaleToScreen;
@@ -239,29 +261,29 @@ public partial class Panel
 			// Grow outerRect so that it can fit the border
 			outerRect = outerRect.Grow( filterBorderWidth );
 
-			ResetPrefilterAttributes();
+			ResetPrefilterAttributes( commandList );
 
-			LayerCommandList.Attributes.Set( "FilterBorderWrapColorScale", Box.RectOuter.Size / outerRect.Size );
-			LayerCommandList.Attributes.Set( "FilterBorderWrapColor", ComputedStyle.FilterBorderColor.Value );
-			LayerCommandList.Attributes.Set( "FilterBorderWrapWidth", filterBorderWidth );
+			commandList.Attributes.Set( "FilterBorderWrapColorScale", Box.RectOuter.Size / outerRect.Size );
+			commandList.Attributes.Set( "FilterBorderWrapColor", ComputedStyle.FilterBorderColor.Value );
+			commandList.Attributes.Set( "FilterBorderWrapWidth", filterBorderWidth );
 
-			LayerCommandList.DrawQuad( outerRect, Material.UI.BorderWrap, Color.White );
+			commandList.DrawQuad( outerRect, Material.UI.BorderWrap, Color.White );
 		}
 	}
 
-	private void ResetPrefilterAttributes()
+	private void ResetPrefilterAttributes( CommandList commandList )
 	{
-		LayerCommandList.Attributes.Set( "FilterDropShadowScale", 0 );
-		LayerCommandList.Attributes.Set( "FilterDropShadowOffset", 0 );
-		LayerCommandList.Attributes.Set( "FilterDropShadowBlur", 0 );
-		LayerCommandList.Attributes.Set( "FilterDropShadowColor", 0 );
+		commandList.Attributes.Set( "FilterDropShadowScale", 0 );
+		commandList.Attributes.Set( "FilterDropShadowOffset", 0 );
+		commandList.Attributes.Set( "FilterDropShadowBlur", 0 );
+		commandList.Attributes.Set( "FilterDropShadowColor", 0 );
 
-		LayerCommandList.Attributes.Set( "FilterBorderWrapColor", 0 );
-		LayerCommandList.Attributes.Set( "FilterBorderWrapWidth", 0 );
+		commandList.Attributes.Set( "FilterBorderWrapColor", 0 );
+		commandList.Attributes.Set( "FilterBorderWrapWidth", 0 );
 	}
 
 	/// <summary>
 	/// Returns true if this panel has a layer that needs post-children rendering.
 	/// </summary>
-	internal bool HasPanelLayer => PanelLayer != null;
+	internal bool HasPanelLayer => _panelLayerSize != null;
 }

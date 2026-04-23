@@ -2,6 +2,7 @@
 using System.Data;
 using System.Globalization;
 using System.IO;
+using System.IO.Enumeration;
 using System.Net;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -650,7 +651,9 @@ public static partial class SandboxSystemExtensions
 		if ( t == typeof( ulong ) ) { Value = str.ToULong(); return true; }
 		if ( t == typeof( long ) ) { Value = str.ToLong(); return true; }
 		if ( t == typeof( Vector2 ) ) { Value = Vector2.Parse( str ); return true; }
+		if ( t == typeof( Vector2Int ) ) { Value = Vector2Int.Parse( str ); return true; }
 		if ( t == typeof( Vector3 ) ) { Value = Vector3.Parse( str ); return true; }
+		if ( t == typeof( Vector3Int ) ) { Value = Vector3Int.Parse( str ); return true; }
 		if ( t == typeof( Vector4 ) ) { Value = Vector4.Parse( str ); return true; }
 		if ( t == typeof( Angles ) ) { Value = global::Angles.Parse( str ); return true; }
 		if ( t == typeof( Color ) ) { Value = global::Color.Parse( str ); return true; }
@@ -821,20 +824,15 @@ public static partial class SandboxSystemExtensions
 
 	/// <summary>
 	/// Returns true if this string matches a wildcard match. Check is case insensitive.
+	/// Supports '*' (zero or more chars) and '?' (exactly one char) wildcards.
+	/// The backslash character '\' escapes '*' to match it literally.
 	/// </summary>
 	public static bool WildcardMatch( this string str, string wildcard )
 	{
 		if ( str == null ) return false;
 		if ( wildcard == null ) return false;
 
-		if ( wildcard.Contains( '*' ) )
-		{
-			wildcard = Regex.Escape( wildcard ).Replace( "\\*", ".*" );
-			wildcard = $"^{wildcard}$";
-			return Regex.IsMatch( str, wildcard, RegexOptions.IgnoreCase );
-		}
-
-		return string.Equals( str, wildcard, StringComparison.OrdinalIgnoreCase );
+		return FileSystemName.MatchesSimpleExpression( wildcard, str, ignoreCase: true );
 	}
 
 

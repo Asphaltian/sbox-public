@@ -39,12 +39,6 @@ public interface IMenuSystem
 	/// </summary>
 	public void OnPackageClosed( Package package );
 
-
-	internal static void ShowServerError( string title, string subtitle )
-	{
-		Current?.Popup( "error", title, subtitle );
-	}
-
 	/// <summary>
 	/// True if we want to force the cursor to be visible and swallow input.
 	/// This is used for the developer console and loading screens.

@@ -11,6 +11,35 @@ internal partial class PanelRenderer
 	internal Rect Scissor;
 
 	/// <summary>
+	/// Accumulated clip rect from <see cref="OverflowMode.ClipWhole"/> ancestors.
+	/// Any panel whose bounds extend outside this rect will be skipped entirely.
+	/// Null when no clip-whole ancestor is active.
+	/// </summary>
+	internal Rect? ClipWholeRect;
+
+	internal bool IsOutsideClipWholeRect( Rect r )
+	{
+		if ( !ClipWholeRect.HasValue ) return false;
+		var clip = ClipWholeRect.Value;
+		return r.Left < clip.Left || r.Top < clip.Top || r.Right > clip.Right || r.Bottom > clip.Bottom;
+	}
+
+	/// <summary>
+	/// Accumulated clip rect from <see cref="OverflowMode.Scroll"/> and <see cref="OverflowMode.Hidden"/> ancestors.
+	/// Any panel whose bounds lie completely outside this rect will be skipped entirely (early cull).
+	/// Uses an overlap test so partially-visible panels still render.
+	/// Null when no scroll/hidden ancestor is active.
+	/// </summary>
+	internal Rect? ScrollCullRect;
+
+	internal bool IsOutsideScrollCullRect( Rect r )
+	{
+		if ( !ScrollCullRect.HasValue ) return false;
+		var clip = ScrollCullRect.Value;
+		return r.Right <= clip.Left || r.Bottom <= clip.Top || r.Left >= clip.Right || r.Top >= clip.Bottom;
+	}
+
+	/// <summary>
 	/// Scissor passed to gpu shader to be transformed
 	/// </summary>
 	internal GPUScissor ScissorGPU;
@@ -25,13 +54,16 @@ internal partial class PanelRenderer
 	/// Scope that updates the renderer's scissor state for child panels to inherit.
 	/// Does NOT modify any command lists - those are set up separately in BuildCommandList.
 	/// </summary>
-	internal class ClipScope : IDisposable
+	internal ref struct ClipScope
 	{
 		Rect Previous;
 		GPUScissor PreviousGPU;
+		bool _disposed = false; // Whether this scope actually set a new scissor or not. If the panel had overflow: visible then we won't set a new scissor, so we can skip restoring the old one.
 
 		public ClipScope( Rect scissorRect, Vector4 cornerRadius, Matrix globalMatrix )
 		{
+			_disposed = true;
+
 			var renderer = GlobalContext.Current.UISystem.Renderer;
 
 			Previous = renderer.Scissor;
@@ -69,6 +101,9 @@ internal partial class PanelRenderer
 
 		public void Dispose()
 		{
+			if ( !_disposed ) return;
+			_disposed = false;
+
 			var renderer = GlobalContext.Current.UISystem.Renderer;
 			renderer.Scissor = Previous;
 			renderer.ScissorGPU = PreviousGPU;
@@ -81,8 +116,8 @@ internal partial class PanelRenderer
 	/// </summary>
 	public ClipScope Clip( Panel panel )
 	{
-		if ( (panel.ComputedStyle?.Overflow ?? OverflowMode.Visible) == OverflowMode.Visible )
-			return null;
+		var overflow = panel.ComputedStyle?.Overflow ?? OverflowMode.Visible;
+		if ( overflow == OverflowMode.Visible || overflow == OverflowMode.ClipWhole ) return default;
 
 		var size = (panel.Box.Rect.Width + panel.Box.Rect.Height) * 0.5f;
 		var borderRadius = new Vector4( panel.ComputedStyle.BorderTopLeftRadius?.GetPixels( size ) ?? 0, panel.ComputedStyle.BorderTopRightRadius?.GetPixels( size ) ?? 0, panel.ComputedStyle.BorderBottomLeftRadius?.GetPixels( size ) ?? 0, panel.ComputedStyle.BorderBottomRightRadius?.GetPixels( size ) ?? 0 );
@@ -90,7 +125,7 @@ internal partial class PanelRenderer
 		return new ClipScope( panel.Box.ClipRect, borderRadius, panel.GlobalMatrix ?? Matrix.Identity );
 	}
 
-	static void SetScissorAttributes( CommandList commandList, GPUScissor scissor )
+	internal static void SetScissorAttributes( CommandList commandList, GPUScissor scissor )
 	{
 		if ( scissor.Rect.Width == 0 && scissor.Rect.Height == 0 )
 		{
@@ -104,64 +139,16 @@ internal partial class PanelRenderer
 		commandList.Attributes.Set( "HasScissor", 1 );
 	}
 
-	void InitScissor( Rect rect, CommandList commandList )
+	void InitScissor( Rect rect )
 	{
 		Scissor = rect;
 		ScissorGPU = new() { Rect = rect, Matrix = Matrix.Identity };
+	}
 
+	void InitScissor( Rect rect, CommandList commandList )
+	{
+		InitScissor( rect );
 		SetScissorAttributes( commandList, ScissorGPU );
 	}
 
-	/// <summary>
-	/// Quick check to see if a panel should be culled based on the current scissor
-	/// </summary>
-	bool ShouldEarlyCull( Panel panel )
-	{
-		//
-		// This shit should be fast, so don't do complicated shit here
-		// Keep it simple AABB, doesn't matter if we miss some overflow because the shader will clear up anything else
-		//
-
-		//
-		// Can't clip contents panels
-		//
-		if ( panel.ComputedStyle.Display == DisplayMode.Contents )
-			return false;
-
-		var rect = panel.Box.Rect;
-
-		//
-		// Grow our rect by any shadows we might have
-		//
-		if ( panel.ComputedStyle.BoxShadow is ShadowList shadows && shadows.Count > 0 )
-		{
-			for ( int i = 0; i < shadows.Count; i++ )
-			{
-				var shadow = shadows[i];
-				if ( shadow.Inset ) continue;
-
-				var shadowRect = panel.Box.Rect + new Vector2( shadow.OffsetX, shadow.OffsetY );
-				rect.Add( shadowRect.Grow( shadow.Spread ) );
-			}
-		}
-
-		//
-		// AABB transform
-		//
-		if ( panel.GlobalMatrix.HasValue )
-		{
-			var mat = panel.GlobalMatrix.Value;
-			var tl = mat.Transform( rect.TopLeft );
-			var tr = mat.Transform( rect.TopRight );
-			var bl = mat.Transform( rect.BottomLeft );
-			var br = mat.Transform( rect.BottomRight );
-
-			var min = Vector2.Min( Vector2.Min( tl, tr ), Vector2.Min( bl, br ) );
-			var max = Vector2.Max( Vector2.Max( tl, tr ), Vector2.Max( bl, br ) );
-
-			rect = new Rect( min, max - min );
-		}
-
-		return !Scissor.IsInside( rect );
-	}
 }

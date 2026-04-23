@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Sandbox.Rendering;
@@ -267,9 +268,16 @@ public sealed unsafe partial class CommandList
 	{
 		static void Execute( ref Entry entry, CommandList commandList )
 		{
-			Graphics.Attributes.SetComboEnum( entry.Token, (T)entry.Object2 );
+			Graphics.Attributes.SetCombo( entry.Token, (int)entry.Data1.x );
 		}
-		AddEntry( &Execute, new Entry { Token = token, Object2 = t } );
+		var intValue = Unsafe.SizeOf<T>() switch
+		{
+			1 => Unsafe.As<T, byte>( ref t ),
+			2 => (int)Unsafe.As<T, short>( ref t ),
+			8 => (int)Unsafe.As<T, long>( ref t ),
+			_ => Unsafe.As<T, int>( ref t )
+		};
+		AddEntry( &Execute, new Entry { Token = token, Data1 = new Vector4( intValue, 0, 0, 0 ) } );
 	}
 
 	[Obsolete]
@@ -400,10 +408,23 @@ public sealed unsafe partial class CommandList
 
 		// TODO - check to make sure we don't create an infinite loop?
 		// maybe make a local int here, increment every call, throw exception if it's over 2?
-
 		static void Execute( ref Entry entry, CommandList commandList )
 		{
-			((CommandList)entry.Object1).ExecuteOnRenderThread();
+			var other = (CommandList)entry.Object1;
+			if ( !other.Enabled )
+				return;
+
+			// Propagate state from parent so child entries can access renderTargets etc.
+			var previousState = other.state;
+			other.state = commandList.state;
+
+			for ( int i = 0; i < other._entries.Count; i++ )
+			{
+				var e = other._entries[i];
+				e.Execute( ref e, other );
+			}
+
+			other.state = previousState;
 		}
 
 		AddEntry( &Execute, new Entry { Object1 = otherBuffer } );
@@ -687,6 +708,19 @@ public sealed unsafe partial class CommandList
 	}
 
 	/// <summary>
+	/// Draws indexed geometry with instancing. Each instance shares the same index buffer.
+	/// </summary>
+	public void DrawIndexedInstanced( GpuBuffer indexBuffer, Material material, int instanceCount, RenderAttributes attributes = null, Graphics.PrimitiveType primitiveType = Graphics.PrimitiveType.Triangles )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			Graphics.DrawIndexedInstanced( (GpuBuffer)entry.Object1, (Material)entry.Object2, (int)entry.Data1.x, (RenderAttributes)entry.Object3, (Graphics.PrimitiveType)(int)entry.Data1.y );
+		}
+
+		AddEntry( &Execute, new Entry { Object1 = indexBuffer, Object2 = material, Data1 = new Vector4( instanceCount, (int)primitiveType, 0, 0 ), Object3 = attributes } );
+	}
+
+	/// <summary>
 	/// Get a screen sized temporary render target. You should release the returned handle when you're done to return the textures to the pool.
 	/// </summary>
 	/// <param name="name">The name of the render target handle.</param>
@@ -962,6 +996,57 @@ public sealed unsafe partial class CommandList
 	}
 
 	/// <summary>
+	/// Clears the given texture to a solid color.
+	/// </summary>
+	/// <param name="texture">The texture to clear.</param>
+	/// <param name="color">The color to clear to. Defaults to transparent black.</param>
+	public void Clear( Texture texture, Color color = default )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			((Texture)entry.Object1).Clear( new Color( entry.Data1.x, entry.Data1.y, entry.Data1.z, entry.Data1.w ) );
+		}
+
+		AddEntry( &Execute, new Entry { Object1 = texture, Data1 = new Vector4( color.r, color.g, color.b, color.a ) } );
+	}
+
+	/// <summary>
+	/// Clears the color texture of the given render target handle to a solid color.
+	/// </summary>
+	/// <param name="handle">The render target handle whose color texture to clear.</param>
+	/// <param name="color">The color to clear to. Defaults to transparent black.</param>
+	public void Clear( RenderTargetHandle handle, Color color = default )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			if ( commandList.state.GetRenderTarget( (string)entry.Object5 ) is not { } target )
+			{
+				Log.Warning( $"[{commandList.DebugName ?? "CommandList"}] Unknown rt: {(string)entry.Object5}" );
+				return;
+			}
+
+			target.ColorTarget.Clear( new Color( entry.Data1.x, entry.Data1.y, entry.Data1.z, entry.Data1.w ) );
+		}
+
+		AddEntry( &Execute, new Entry { Object5 = handle.ColorTexture.Name, Data1 = new Vector4( color.r, color.g, color.b, color.a ) } );
+	}
+
+	/// <summary>
+	/// Fills the given GPU buffer with a repeated uint32 value.
+	/// </summary>
+	/// <param name="buffer">The buffer to clear.</param>
+	/// <param name="value">The uint32 value to fill with. Defaults to zero.</param>
+	public void Clear( GpuBuffer buffer, uint value = 0 )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			((GpuBuffer)entry.Object1).Clear( (uint)entry.Data1.x );
+		}
+
+		AddEntry( &Execute, new Entry { Object1 = buffer, Data1 = new Vector4( value, 0, 0, 0 ) } );
+	}
+
+	/// <summary>
 	/// Executes a barrier transition for the given GPU Texture Resource.
 	/// Transitions the texture resource to a new pipeline stage and access state.
 	/// </summary>
@@ -1067,6 +1152,36 @@ public sealed unsafe partial class CommandList
 	}
 
 	/// <summary>
+	/// Issues a UAV barrier for the given texture, ensuring writes from prior shader invocations
+	/// are visible to subsequent ones without changing the resource layout.
+	/// </summary>
+	/// <param name="texture">The texture to barrier.</param>
+	public void UavBarrier( Texture texture )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			Graphics.UavBarrier( (Texture)entry.Object1 );
+		}
+
+		AddEntry( &Execute, new Entry { Object1 = texture } );
+	}
+
+	/// <summary>
+	/// Issues a UAV barrier for the given GPU buffer, ensuring writes from prior shader invocations
+	/// are visible to subsequent ones.
+	/// </summary>
+	/// <param name="buffer">The buffer to barrier.</param>
+	public void UavBarrier( GpuBuffer buffer )
+	{
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			Graphics.UavBarrier( (GpuBuffer)entry.Object1 );
+		}
+
+		AddEntry( &Execute, new Entry { Object1 = buffer } );
+	}
+
+	/// <summary>
 	/// Sneaky way for extensions to add an action. This creates an allocation, so it should be used sparingly.
 	/// </summary>
 	private void AddAction( Action a )
@@ -1136,5 +1251,42 @@ public sealed unsafe partial class CommandList
 		}
 
 		AddEntry( &Execute, new Entry { Object1 = texture, Data1 = new Vector4( (int)method, 0, 0, 0 ) } );
+	}
+
+	/// <summary>
+	/// Draws text within a rectangle using a prepared <see cref="TextRendering.Scope"/>.
+	/// </summary>
+	/// <param name="scope">The text rendering scope.</param>
+	/// <param name="rect">The rectangle to draw the text in.</param>
+	/// <param name="flags">Text alignment flags (optional).</param>
+	public void DrawText( TextRendering.Scope scope, Rect rect, TextFlag flags = TextFlag.LeftTop )
+	{
+		// Resolve the TextBlock at entry-add time so we store a class reference instead of
+		// boxing the Scope struct and TextFlag enum into object fields.
+		var tb = TextRendering.GetOrCreateTextBlock( scope, flags, 8096 );
+		if ( tb is null ) return; // headless
+
+		static void Execute( ref Entry entry, CommandList commandList )
+		{
+			var position = new Rect( entry.Data1.x, entry.Data1.y, entry.Data1.z, entry.Data1.w );
+			var flags = (TextFlag)(int)entry.Data2.x;
+			var tb = (TextRendering.TextBlock)entry.Object1;
+
+			// MakeReady resets TimeSinceUsed, preventing Tick() from evicting this block
+			tb.MakeReady();
+
+			Graphics.Attributes.Set( "Texture", tb.Texture );
+			Graphics.Attributes.Set( "SamplerIndex", SamplerState.GetBindlessIndex( new SamplerState() { Filter = tb.FilterMode } ) );
+
+			var rect = position.Align( tb.Texture.Size, flags );
+			Graphics.DrawQuad( rect.Floor(), Material.UI.Text, Color.White );
+		}
+
+		AddEntry( &Execute, new Entry
+		{
+			Object1 = tb,
+			Data1 = new Vector4( rect.Left, rect.Top, rect.Width, rect.Height ),
+			Data2 = new Vector4( (float)(int)flags, 0, 0, 0 )
+		} );
 	}
 }

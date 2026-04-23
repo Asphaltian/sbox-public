@@ -74,6 +74,7 @@ internal sealed class TextBlock : IDisposable
 	FilterMode TextFilter;
 	TextDecoration TextDecoration;
 	FontStyle FontStyle;
+	FontVariantNumeric? FontVariantNumeric;
 	WordBreak WordBreak;
 	TextTransform? TextTransform;
 	Length? LetterSpacing;
@@ -121,9 +122,9 @@ internal sealed class TextBlock : IDisposable
 	}
 
 	/// <summary>
-	/// Proper Rendering
+	/// Build a text descriptor into the target RenderLayer.
 	/// </summary>
-	internal void BuildCommandList( CommandList commandList, PanelRenderer renderer, ref RenderState state, Styles currentStyle, Rect textrect, float opacity )
+	internal void BuildDescriptors( RenderLayer target, BlendMode blendMode, Styles currentStyle, Rect textrect, float opacity )
 	{
 		WaitTextureReady();
 
@@ -156,17 +157,21 @@ internal sealed class TextBlock : IDisposable
 
 		if ( color.a <= 0 ) return;
 
-		var attributes = commandList.Attributes;
+		var rect = textrect.Floor();
 
-		attributes.Set( "BoxPosition", textrect.Position );
-		attributes.Set( "BoxSize", textrect.Size );
+		var desc = new BoxDrawDescriptor( rect, new Color( 0, 0, 0, 0 ) )
+		{
+			BackgroundImage = Texture,
+			BackgroundRect = new Vector4( 0, 0, rect.Width, rect.Height ),
+			BackgroundTint = color,
+			OverrideBlendMode = blendMode == BlendMode.Normal ? BlendMode.PremultipliedAlpha : blendMode,
+			PremultiplyAlpha = true,
+			FilterMode = TextFilter,
+		};
 
-		attributes.Set( "Texture", Texture );
-		attributes.Set( "SamplerIndex", SamplerState.GetBindlessIndex( new SamplerState() { Filter = TextFilter } ) );
-		attributes.SetCombo( "D_BLENDMODE", renderer.OverrideBlendMode );
-
-		commandList.DrawQuad( textrect.Floor(), Material.UI.Text, color );
+		target.AddBox( desc );
 	}
+
 
 
 	public Rect CaretRect( int caretPosition )
@@ -220,6 +225,7 @@ internal sealed class TextBlock : IDisposable
 		TextAlign = style.TextAlign.Value;
 		TextDecoration = style.TextDecorationLine.Value;
 		FontStyle = style.FontStyle.Value;
+		FontVariantNumeric = style.FontVariantNumeric;
 		AlignItems = style.AlignItems.Value;
 		LetterSpacing = style.LetterSpacing;
 		WordSpacing = style.WordSpacing;
@@ -237,7 +243,7 @@ internal sealed class TextBlock : IDisposable
 		hash = HashCode.Combine( hash, style.TextStrokeWidth, style.TextStrokeColor, style.TextDecorationColor, style.TextDecorationThickness, style.TextDecorationSkipInk, style.TextDecorationStyle );
 		hash = HashCode.Combine( hash, style.TextUnderlineOffset, style.TextOverlineOffset, style.TextLineThroughOffset, style.TextGradient, style.TextOverflow, style.WordBreak, style.LineHeight );
 		hash = HashCode.Combine( hash, style.WordSpacing );
-		hash = HashCode.Combine( hash, Smooth );
+		hash = HashCode.Combine( hash, Smooth, FontVariantNumeric );
 
 		if ( FontHash == hash && Block != null )
 			return false;
@@ -254,6 +260,7 @@ internal sealed class TextBlock : IDisposable
 		Style.FontSize = FontSize;
 		Style.FontWeight = FontWeight ?? 400;
 		Style.FontItalic = FontStyle != FontStyle.None;
+		Style.FontVariantNumeric = FontVariantNumeric ?? UI.FontVariantNumeric.Normal;
 		Style.TextColor = fontColor.ToSk();
 		Style.Underline = UnderlineStyle.None;
 		Style.StrokeInkSkip = style.TextDecorationSkipInk == TextSkipInk.All;
@@ -387,6 +394,7 @@ internal sealed class TextBlock : IDisposable
 						sty.BackgroundColor = s.BackgroundColor?.ToSk() ?? sty.BackgroundColor;
 						sty.FontWeight = s.FontWeight ?? sty.FontWeight;
 						sty.FontItalic = s.FontStyle == FontStyle.Italic;
+						sty.FontVariantNumeric = s.FontVariantNumeric ?? sty.FontVariantNumeric;
 						sty.Underline = s.TextDecorationLine == UI.TextDecoration.Underline ? UnderlineStyle.Solid : UnderlineStyle.None;
 						sty.UnderlineColor = sty.TextColor;
 						sty.LetterSpacing = s.LetterSpacing?.GetPixels( 1000.0f ) ?? sty.LetterSpacing;
@@ -455,6 +463,7 @@ internal sealed class TextBlock : IDisposable
 		LastTexture = Texture;
 
 		Texture = null;
+		OnTextureChanged?.Invoke();
 	}
 
 	int lastSizeHash = 0;
@@ -544,7 +553,7 @@ internal sealed class TextBlock : IDisposable
 
 		using var perfScope = Performance.Scope( "TextBlock.RebuildTexture" );
 
-		using ( var bitmap = new SKBitmap( width, height, SKColorType.Bgra8888, SKAlphaType.Unpremul ) )
+		using ( var bitmap = new SKBitmap( width, height, SKColorType.Bgra8888, SKAlphaType.Premul ) )
 		using ( var canvas = new SKCanvas( bitmap ) )
 		{
 			var o = new Topten.RichTextKit.TextPaintOptions
