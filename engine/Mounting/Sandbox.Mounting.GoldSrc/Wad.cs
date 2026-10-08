@@ -21,6 +21,9 @@ public class WadLump
 
 public class Wad
 {
+	public const char TypePic = 'B';
+	public const char TypeMipTex = 'C';
+
 	public WadHeader Header { get; private set; }
 	public List<WadLump> Lumps { get; private set; } = [];
 
