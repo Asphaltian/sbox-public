@@ -123,10 +123,10 @@ class File
 
 		if ( destArray != null )
 		{
-			Array.Copy( _boneNormals, _modelVertexOffsets[modelOffset], destArray, destOffset, model.NumVerts );
+			Array.Copy( _boneNormals, _modelNormalOffsets[modelOffset], destArray, destOffset, model.NumNorms );
 		}
 
-		return model.NumVerts;
+		return model.NumNorms;
 	}
 
 	public int GetTriVerts( int bodyPartIndex, int modelIndex, int meshIndex, TriVert[] destArray, int destOffset = 0 )
@@ -351,8 +351,8 @@ class File
 		_meshes = new Mesh[_models.Sum( x => x.NumMesh )];
 		_vertices = new Vector3[_models.Sum( x => x.NumVerts )];
 		_boneVertices = new byte[_vertices.Length];
-		_boneNormals = new byte[_vertices.Length];
 		_normals = new Vector3[_models.Sum( x => x.NumNorms )];
+		_boneNormals = new byte[_normals.Length];
 		_meshTriVertOffsets = new int[_meshes.Length];
 
 		var meshesRead = 0;
@@ -377,7 +377,7 @@ class File
 			for ( var i = 0; i < model.NumVerts; i++ ) _boneVertices[verticesRead + i] = br.ReadByte();
 
 			ms.Seek( model.NormInfoIndex, SeekOrigin.Begin );
-			for ( var i = 0; i < model.NumVerts; i++ ) _boneNormals[verticesRead + i] = br.ReadByte();
+			for ( var i = 0; i < model.NumNorms; i++ ) _boneNormals[normalsRead + i] = br.ReadByte();
 
 			verticesRead += model.NumVerts;
 
@@ -462,12 +462,7 @@ class File
 			ms.Seek( textureData.Index + pixelCount, SeekOrigin.Begin );
 			var palette = br.ReadBytes( 256 * 3 );
 
-			if ( (textureData.Flags & LightingFlags.Masked) != 0 )
-			{
-				palette[(255 * 3) + 0] = 0;
-				palette[(255 * 3) + 1] = 0;
-				palette[(255 * 3) + 2] = 0;
-			}
+			var masked = (textureData.Flags & LightingFlags.Masked) != 0;
 
 			var imageData = new byte[pixelCount * 4];
 			var imageDataSpan = imageData.AsSpan();
@@ -478,6 +473,9 @@ class File
 				var palIndex = pixelData[j] * 3;
 				var destIndex = j * 4;
 
+				if ( masked && pixelData[j] == 255 )
+					continue;
+
 				imageDataSpan[destIndex] = paletteSpan[palIndex];
 				imageDataSpan[destIndex + 1] = paletteSpan[palIndex + 1];
 				imageDataSpan[destIndex + 2] = paletteSpan[palIndex + 2];
@@ -487,10 +485,9 @@ class File
 			var width = textureData.Width;
 			var height = textureData.Height;
 
-			_textures[i] = Texture.Create( width, height )
-				.WithData( imageData )
-				.WithMips()
-				.Finish();
+			TextureUpload.ApplyGamma( imageData, width, height, masked ? TextureType.Alpha : TextureType.Opaque );
+
+			_textures[i] = TextureUpload.CreateTexture( imageData, width, height, !textureData.Flags.HasFlag( LightingFlags.NoMips ) );
 		}
 
 		_skinRefs = new short[_header.NumSkinFamilies * _header.NumSkinRef];
@@ -518,47 +515,59 @@ class File
 		for ( var i = 0; i < _sequences.Length; i++ ) _sequences[i] = new SequenceDesc( br );
 	}
 
+	public const int AnimSize = 12;
+
+	public BoneTransforms[][] BlendTransforms;
+
 	public void LoadAnimations( List<BinaryReader> readers )
 	{
 		SequenceTransforms = new BoneTransforms[_sequences.Length];
+		BlendTransforms = new BoneTransforms[_sequences.Length][];
 
 		for ( var sequenceIndex = 0; sequenceIndex < _sequences.Length; ++sequenceIndex )
 		{
 			var seq = _sequences[sequenceIndex];
 			var br = readers[seq.SeqGroup];
+			var numBlends = System.Math.Max( seq.NumBlends, 1 );
 
-			var anims = new Anim[_header.NumBones];
-			br.BaseStream.Seek( seq.AnimIndex, SeekOrigin.Begin );
-			for ( var i = 0; i < anims.Length; i++ )
+			BlendTransforms[sequenceIndex] = new BoneTransforms[numBlends];
+
+			for ( var blend = 0; blend < numBlends; blend++ )
 			{
-				anims[i] = new Anim( br );
-			}
+				var blendOffset = seq.AnimIndex + (blend * _header.NumBones * AnimSize);
+				var anims = new Anim[_header.NumBones];
+				var transforms = new BoneTransforms { Transforms = new Transform[_header.NumBones * seq.NumFrames] };
 
-			SequenceTransforms[sequenceIndex] = new BoneTransforms { Transforms = new Transform[_header.NumBones * seq.NumFrames] };
+				br.BaseStream.Seek( blendOffset, SeekOrigin.Begin );
 
-			const int animSize = 12;
+				for ( var i = 0; i < anims.Length; i++ )
+					anims[i] = new Anim( br );
 
-			for ( var boneIndex = 0; boneIndex < _header.NumBones; ++boneIndex )
-			{
-				var bone = _bones[boneIndex];
-				var anim = anims[boneIndex];
-				var animOffset = seq.AnimIndex + (boneIndex * animSize);
-
-				for ( var frameIndex = 0; frameIndex < seq.NumFrames; ++frameIndex )
+				for ( var boneIndex = 0; boneIndex < _header.NumBones; ++boneIndex )
 				{
-					var position = CalcBonePosition( br, frameIndex, bone, anim, animOffset );
-					var rotation = CalcBoneRotation( br, frameIndex, bone, anim, animOffset );
-
-					if ( seq.MotionBone == boneIndex )
+					var bone = _bones[boneIndex];
+					var anim = anims[boneIndex];
+					var animOffset = blendOffset + (boneIndex * AnimSize);
+					for ( var frameIndex = 0; frameIndex < seq.NumFrames; ++frameIndex )
 					{
-						if ( seq.MotionType.Contains( MotionFlags.X ) ) position = position.WithX( 0 );
-						if ( seq.MotionType.Contains( MotionFlags.Y ) ) position = position.WithY( 0 );
-						if ( seq.MotionType.Contains( MotionFlags.Z ) ) position = position.WithZ( 0 );
-					}
+						var position = CalcBonePosition( br, frameIndex, bone, anim, animOffset );
+						var rotation = CalcBoneRotation( br, frameIndex, bone, anim, animOffset );
 
-					SequenceTransforms[sequenceIndex].Transforms[(frameIndex * _header.NumBones) + boneIndex] = new Transform( position, rotation );
+						if ( seq.MotionBone == boneIndex )
+						{
+							if ( seq.MotionType.Contains( MotionFlags.X ) ) position = position.WithX( 0 );
+							if ( seq.MotionType.Contains( MotionFlags.Y ) ) position = position.WithY( 0 );
+							if ( seq.MotionType.Contains( MotionFlags.Z ) ) position = position.WithZ( 0 );
+						}
+
+						transforms.Transforms[(frameIndex * _header.NumBones) + boneIndex] = new Transform( position, rotation );
+					}
 				}
+
+				BlendTransforms[sequenceIndex][blend] = transforms;
 			}
+
+			SequenceTransforms[sequenceIndex] = BlendTransforms[sequenceIndex][0];
 		}
 	}
 }

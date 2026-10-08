@@ -74,9 +74,14 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 		var materialCache = new Dictionary<int, Material>();
 		var skinRefs = new List<int>();
 
+		var bodyPartNames = new HashSet<string>();
+
 		for ( var bodyPartIndex = 0; bodyPartIndex < mdlFile.NumBodyParts; ++bodyPartIndex )
 		{
 			var bodyPart = mdlFile.GetBodyPart( bodyPartIndex );
+			var bodyPartName = bodyPartNames.Add( bodyPart.Name ) ? bodyPart.Name : $"{bodyPart.Name} {bodyPartIndex}";
+
+			bodyPartNames.Add( bodyPartName );
 
 			for ( var modelIndex = 0; modelIndex < bodyPart.NumModels; ++modelIndex )
 			{
@@ -84,10 +89,12 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 				var vertices = new Vector3[bodyPartModel.NumVerts];
 				var normals = new Vector3[bodyPartModel.NumNorms];
 				var boneVertices = new byte[bodyPartModel.NumVerts];
+				var boneNormals = new byte[bodyPartModel.NumNorms];
 
 				mdlFile.GetVertices( bodyPartIndex, modelIndex, vertices );
 				mdlFile.GetNormals( bodyPartIndex, modelIndex, normals );
 				mdlFile.GetBoneVertices( bodyPartIndex, modelIndex, boneVertices );
+				mdlFile.GetBoneNormals( bodyPartIndex, modelIndex, boneNormals );
 
 				for ( int i = 0; i < vertices.Length; ++i )
 				{
@@ -98,7 +105,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 
 				if ( bodyPartModel.NumMesh == 0 )
 				{
-					builder.AddMesh( null, bodyPart.Name, modelIndex );
+					builder.AddMesh( null, bodyPartName, modelIndex );
 					continue;
 				}
 
@@ -106,8 +113,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 				{
 					var modelMesh = mdlFile.GetMesh( bodyPartIndex, modelIndex, meshIndex );
 					var textureIndex = textureMdl.GetTextureIndex( modelMesh.SkinRef, 0 );
-					var texture = textureMdl.GetTexture( textureIndex );
-					textureMdl.GetTextureData( textureIndex, out var textureName, out var textureWidth, out var textureHeight, out var textureFlags );
+					textureMdl.GetTextureData( textureIndex, out _, out var textureWidth, out var textureHeight, out _ );
 
 					var triVerts = new GoldSrc.Mdl.TriVert[modelMesh.NumTris * 3];
 					mdlFile.GetTriVerts( bodyPartIndex, modelIndex, meshIndex, triVerts );
@@ -130,12 +136,12 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 
 							var boneVertex = boneVertices[triVert.VertIndex];
 							position = boneTransforms[boneVertex].PointToWorld( position );
-							normal = boneTransforms[boneVertex].NormalToWorld( normal );
+							normal = boneTransforms[boneNormals[triVert.NormIndex]].NormalToWorld( normal );
 
 							var blendIndices = new Color32( boneVertex, 255, 255, 255 );
 							var blendWeights = new Color32( 255, 0, 0, 0 );
 
-							uniqueVertices.Add( new SkinnedVertex( position, normal, new Vector2( triVert.S * s, triVert.T * t ), blendIndices, blendWeights ) );
+							uniqueVertices.Add( new SkinnedVertex( position, normal, new Vector2( triVert.S * s, triVert.T * t ), new Vector2( boneVertex, 0f ), blendIndices, blendWeights ) );
 							vertexMap[triVert] = index;
 						}
 
@@ -146,9 +152,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 
 					if ( !materialCache.TryGetValue( textureIndex, out var material ) )
 					{
-						material = Material.Create( $"{Path}/{textureName}.vmat", "goldsrc", false );
-						material?.Set( "Color", texture );
-						material?.SetFeature( "F_CHROME", textureFlags.HasFlag( GoldSrc.Mdl.LightingFlags.Chrome ) ? 1 : 0 );
+						material = CreateMaterial( textureMdl, textureIndex );
 
 						materialCache[textureIndex] = material;
 						skinRefs.Add( modelMesh.SkinRef );
@@ -158,7 +162,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 					mesh.CreateVertexBuffer( uniqueVertices.Count, uniqueVertices );
 					mesh.CreateIndexBuffer( indices.Length, indices );
 					mesh.Bounds = BBox.FromPoints( uniqueVertices.Select( x => x.Position ) );
-					builder.AddMesh( mesh, bodyPart.Name, modelIndex );
+					builder.AddMesh( mesh, bodyPartName, modelIndex );
 				}
 			}
 		}
@@ -169,16 +173,28 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 		}
 
 		int sequenceIndex = 0;
+		var animationNames = new HashSet<string>( System.StringComparer.OrdinalIgnoreCase );
 		foreach ( var sequence in mdlFile.Sequences )
 		{
-			var transforms = mdlFile.SequenceTransforms[sequenceIndex].Transforms.AsSpan();
 			int boneCount = bones.Count;
 			var frameCount = sequence.NumFrames;
-			var animation = builder.AddAnimation( sequence.Label, sequence.Fps );
+			var name = sequence.Label;
 
-			for ( var frameIndex = 0; frameIndex < frameCount; ++frameIndex )
+			if ( string.IsNullOrWhiteSpace( name ) || !animationNames.Add( name ) )
 			{
-				animation.AddFrame( transforms.Slice( frameIndex * boneCount, boneCount ) );
+				name = $"{name} {sequenceIndex}";
+				animationNames.Add( name );
+			}
+
+			for ( var blend = 0; blend < mdlFile.BlendTransforms[sequenceIndex].Length; blend++ )
+			{
+				var transforms = mdlFile.BlendTransforms[sequenceIndex][blend].Transforms.AsSpan();
+				var animation = builder.AddAnimation( blend == 0 ? name : $"{name} blend {blend}", sequence.Fps );
+
+				for ( var frameIndex = 0; frameIndex < frameCount; ++frameIndex )
+				{
+					animation.AddFrame( transforms.Slice( frameIndex * boneCount, boneCount ) );
+				}
 			}
 
 			sequenceIndex++;
@@ -196,10 +212,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 					int textureIndex = textureMdl.GetTextureIndex( skinRef, skinFamily );
 					if ( !materialCache.TryGetValue( textureIndex, out var material ) )
 					{
-						var texture = textureMdl.GetTexture( textureIndex );
-						var textureName = textureMdl.GetTextureName( textureIndex );
-						material = Material.Create( $"{Path}/{textureName}.vmat", "goldsrc", false );
-						material?.Set( "Color", texture );
+						material = CreateMaterial( textureMdl, textureIndex );
 						materialCache[textureIndex] = material;
 					}
 
@@ -223,6 +236,24 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 		return builder.Create();
 	}
 
+	private Material CreateMaterial( GoldSrc.Mdl.File textureMdl, int textureIndex )
+	{
+		textureMdl.GetTextureData( textureIndex, out var name, out var width, out var height, out var flags );
+
+		var material = Material.Create( $"{Path}/{name}.vmat", "goldsrc_studio", false );
+		if ( material is null )
+			return null;
+
+		material.Set( "Color", textureMdl.GetTexture( textureIndex ) );
+		material.Set( "g_vTextureSize", new Vector2( width, height ) );
+		material.SetFeature( "F_FLATSHADE", flags.HasFlag( GoldSrc.Mdl.LightingFlags.FlatShade ) ? 1 : 0 );
+		material.SetFeature( "F_CHROME", flags.HasFlag( GoldSrc.Mdl.LightingFlags.Chrome ) ? 1 : 0 );
+		material.SetFeature( "F_ADDITIVE", flags.HasFlag( GoldSrc.Mdl.LightingFlags.Additive ) ? 1 : 0 );
+		material.SetFeature( "F_MASKED", flags.HasFlag( GoldSrc.Mdl.LightingFlags.Masked ) ? 1 : 0 );
+
+		return material;
+	}
+
 	private static Rotation AngleQuaternion( Vector3 angles )
 	{
 		var (sy, cy) = MathF.SinCos( angles.z * 0.5f );
@@ -240,7 +271,7 @@ class ModelLoader( string fullPath ) : ResourceLoader<GameMount>
 }
 
 [StructLayout( LayoutKind.Sequential )]
-public struct SkinnedVertex( Vector3 position, Vector3 normal, Vector2 texcoord, Color32 blendIndices, Color32 blendWeights )
+public struct SkinnedVertex( Vector3 position, Vector3 normal, Vector2 texcoord, Vector2 bone, Color32 blendIndices, Color32 blendWeights )
 {
 	[VertexLayout.Position]
 	public Vector3 Position = position;
@@ -248,8 +279,11 @@ public struct SkinnedVertex( Vector3 position, Vector3 normal, Vector2 texcoord,
 	[VertexLayout.Normal]
 	public Vector3 Normal = normal;
 
-	[VertexLayout.TexCoord]
+	[VertexLayout.TexCoord( 0 )]
 	public Vector2 Texcoord = texcoord;
+
+	[VertexLayout.TexCoord( 1 )]
+	public Vector2 Bone = bone;
 
 	[VertexLayout.BlendIndices]
 	public Color32 BlendIndices = blendIndices;
