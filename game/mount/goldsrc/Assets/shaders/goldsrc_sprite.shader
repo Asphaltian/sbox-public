@@ -116,11 +116,11 @@ PS
 		return lerp( low, high, step( 0.0031308, color ) );
 	}
 
-	float4 Finish( float4 color, float3 source )
+	float4 Finish( float4 color )
 	{
 		#if D_GAMMA_SPACE
 			if ( !DepthNormals::WantsDepthNormals() && !g_bWireframeMode && !ToolsVis::WantsToolsVis() )
-				color.rgb = source + ( LinearToGamma( color.rgb ) - LinearToGamma( GammaToLinear( source ) ) );
+				color.rgb = LinearToGamma( color.rgb );
 		#endif
 
 		return color;
@@ -128,9 +128,9 @@ PS
 
 	float4 Blended( PixelInput i, float3 color, float alpha )
 	{
-		float3 position = i.vPositionWithOffsetWs + g_vCameraPositionWs;
+		float3 position = i.vPositionWithOffsetWs + g_vHighPrecisionLightingOffsetWs.xyz;
 
-		return Finish( float4( Fog::Apply( position, i.vPositionSs.xy, GammaToLinear( color ) ), alpha ), color );
+		return Finish( float4( Fog::Apply( position, i.vPositionSs.xy, GammaToLinear( color ) ), alpha ) );
 	}
 
 	float4 g_vFog < Attribute( "Fog" ); Default4( 0.0, 0.0, 0.0, 0.0 ); >;

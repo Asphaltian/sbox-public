@@ -23,16 +23,19 @@ partial class BrushModel
 
 	private static readonly Vector2[] SkyCorners = [new( -1, -1 ), new( -1, 1 ), new( 1, 1 ), new( 1, -1 )];
 
-	private void AddSkyBox( ModelBuilder builder )
+	private string SkyName()
 	{
-		var worldspawn = _file.Entities[0];
-
-		var name = worldspawn.ValueForKey( "skyname" );
+		var name = _file.Entities[0].ValueForKey( "skyname" );
 		if ( name.Length == 0 )
 			name = ConsoleSystem.GetValue( "sv_skyname", DefaultSky );
 
-		if ( name.Length == 0 || FindSkySide( name, SkySides[0] ) is null )
-			name = DefaultSky;
+		return name.Length == 0 || FindSkySide( name, SkySides[0] ) is null ? DefaultSky : name;
+	}
+
+	private void AddSkyBox( ModelBuilder builder )
+	{
+		var worldspawn = _file.Entities[0];
+		var name = SkyName();
 
 		var maxRange = worldspawn.FloatForKey( "MaxRange" );
 		var width = (maxRange > 0f ? maxRange : DefaultMaxRange) * 0.57735f;

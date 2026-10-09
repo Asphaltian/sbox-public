@@ -83,9 +83,15 @@ readonly struct Leaf( BinaryReader reader )
 {
 	public const int Size = 28;
 	public const int ContentsSolid = -2;
+	public const int ContentsSky = -6;
 
 	public readonly int Contents = reader.ReadInt32();
-	public readonly byte[] Remainder = reader.ReadBytes( Size - sizeof( int ) );
+	public readonly int VisOffset = reader.ReadInt32();
+	public readonly Vector3 Mins = new( reader.ReadInt16(), reader.ReadInt16(), reader.ReadInt16() );
+	public readonly Vector3 Maxs = new( reader.ReadInt16(), reader.ReadInt16(), reader.ReadInt16() );
+	public readonly ushort FirstMarkSurface = reader.ReadUInt16();
+	public readonly ushort NumMarkSurfaces = reader.ReadUInt16();
+	public readonly byte[] AmbientLevel = reader.ReadBytes( 4 );
 }
 
 readonly struct Edge( BinaryReader reader )

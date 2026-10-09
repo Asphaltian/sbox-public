@@ -84,6 +84,8 @@ PS
 {
 	#include "common/pixel.hlsl"
 
+	RenderState( AlphaToCoverageEnable, false );
+
 	#define kRenderNormal 0
 	#define kRenderTransColor 1
 	#define kRenderTransTexture 2
@@ -129,7 +131,7 @@ PS
 	CreateInputTexture2D( Color, Linear, 8, "None", "_color", ",0/,0/0", Default4( 1.00, 1.00, 1.00, 1.00 ) );
 	Texture2D g_tColor < Channel( RGBA, Box( Color ), Linear ); OutputFormat( RGBA8888 ); SrgbRead( false ); >;
 
-	static const float kAlphaMin = 0.25;
+	static const float kAlphaReference = 0.25;
 
 	float g_flBlend < Attribute( "Blend" ); >;
 	float3 g_vRenderColor < Attribute( "RenderColor" ); >;
@@ -172,30 +174,30 @@ PS
 		return lerp( low, high, step( 0.0031308, color ) );
 	}
 
-	float4 Finish( float4 color, float3 source )
+	float4 Finish( float4 color )
 	{
 		#if D_GAMMA_SPACE
 			if ( !DepthNormals::WantsDepthNormals() && !g_bWireframeMode && !ToolsVis::WantsToolsVis() )
-				color.rgb = source + ( LinearToGamma( color.rgb ) - LinearToGamma( GammaToLinear( source ) ) );
+				color.rgb = LinearToGamma( color.rgb );
 		#endif
 
 		return color;
 	}
 
-	float4 Standard( PixelInput i, float3 albedo, float3 baked, float occlusion )
+	float4 Standard( PixelInput i, float3 baked )
 	{
-		Material m = Material::Init();
+		Material m = Material::Init( i.vPositionWithOffsetWs, i.vPositionSs );
 
-		m.Albedo = GammaToLinear( albedo );
+		m.Albedo = float3( 0.0, 0.0, 0.0 );
 		m.Emission = GammaToLinear( baked );
 		m.Normal = normalize( i.vNormalWs );
 		m.Roughness = 1.0;
 		m.Metalness = 0.0;
-		m.AmbientOcclusion = occlusion;
+		m.AmbientOcclusion = 0.0;
 		m.Opacity = 1.0;
 		m.TextureCoords = i.vTextureCoords.xy;
 
-		return Finish( ShadingModelStandard::Shade( i, m ), baked );
+		return Finish( ShadingModelStandard::Shade( m ) );
 	}
 
 	float4 g_vFog < Attribute( "Fog" ); Default4( 0.0, 0.0, 0.0, 0.0 ); >;
@@ -224,14 +226,14 @@ PS
 		#elif D_RENDER_MODE == kRenderTransAdd
 			return Output( color.rgb * g_flBlend, 1.0 );
 		#elif D_RENDER_MODE == kRenderTransAlpha
-			if ( color.a <= kAlphaMin )
+			if ( color.a <= kAlphaReference )
 				discard;
 		#endif
 
 		#if D_RENDER_MODE == kRenderNormal
-			return Standard( i, float3( 0.0, 0.0, 0.0 ), WaterFog( color.rgb, i.vPositionWithOffsetWs ), 0.0 );
+			return Standard( i, WaterFog( color.rgb, i.vPositionWithOffsetWs ) );
 		#else
-			return Standard( i, float3( 0.0, 0.0, 0.0 ), color.rgb, 0.0 );
+			return Standard( i, color.rgb );
 		#endif
 	}
 }

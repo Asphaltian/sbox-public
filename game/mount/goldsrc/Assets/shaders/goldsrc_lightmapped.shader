@@ -61,6 +61,8 @@ PS
 {
 	#include "common/pixel.hlsl"
 
+	RenderState( AlphaToCoverageEnable, false );
+
 	#define kRenderNormal 0
 	#define kRenderTransColor 1
 	#define kRenderTransTexture 2
@@ -187,7 +189,7 @@ PS
 
 		return clamp( floor( pow( light, 1.0 / Gamma() ) * 1023.0 ), 0.0, 1023.0 );
 	}
-	static const float kAlphaMin = 0.25;
+	static const float kAlphaReference = 0.25;
 
 	static const int kFullbrightStyle = 254;
 	static const int kNoStyle = 255;
@@ -349,11 +351,11 @@ PS
 		return lerp( low, high, step( 0.0031308, color ) );
 	}
 
-	float4 Finish( float4 color, float3 source )
+	float4 Finish( float4 color )
 	{
 		#if D_GAMMA_SPACE
 			if ( !DepthNormals::WantsDepthNormals() && !g_bWireframeMode && !ToolsVis::WantsToolsVis() )
-				color.rgb = source + ( LinearToGamma( color.rgb ) - LinearToGamma( GammaToLinear( source ) ) );
+				color.rgb = LinearToGamma( color.rgb );
 		#endif
 
 		return color;
@@ -361,43 +363,40 @@ PS
 
 	float3 SceneLight( PixelInput i )
 	{
-		float3 position = i.vPositionWithOffsetWs + g_vCameraPositionWs;
-		float3 normal = normalize( i.vNormalWs );
-		float3 total = float3( 0.0, 0.0, 0.0 );
-		uint count = Light::Count( i.vPositionSs );
+		Material m = Material::Init( i.vPositionWithOffsetWs, i.vPositionSs );
 
-		for ( uint index = 0; index < count; index++ )
-		{
-			Light light = Light::From( position, i.vPositionSs, index, 0.0, normal );
+		m.Normal = normalize( i.vNormalWs );
+		m.Roughness = 1.0;
+		m.Metalness = 0.0;
 
-			total += light.Color * light.Attenuation * light.Visibility * saturate( dot( normal, light.Direction ) );
-		}
+		LightingTerms_t terms = InitLightingTerms();
+		ComputeDirectLighting( terms, ShadingModelStandard::MaterialToCombinerInput( m ) );
 
-		return total;
+		return terms.vDiffuse.rgb;
 	}
 
 	float4 Blended( PixelInput i, float3 color, float3 albedo, float alpha )
 	{
-		float3 position = i.vPositionWithOffsetWs + g_vCameraPositionWs;
+		float3 position = i.vPositionWithOffsetWs + g_vHighPrecisionLightingOffsetWs.xyz;
 		float3 result = GammaToLinear( color ) * ScreenSpaceAmbientOcclusion::Sample( i.vPositionSs ) + GammaToLinear( albedo ) * SceneLight( i );
 
-		return Finish( float4( Fog::Apply( position, i.vPositionSs.xy, result ), alpha ), color );
+		return Finish( float4( Fog::Apply( position, i.vPositionSs.xy, result ), alpha ) );
 	}
 
-	float4 Standard( PixelInput i, float3 albedo, float3 baked, float occlusion )
+	float4 Standard( PixelInput i, float3 albedo, float3 baked )
 	{
-		Material m = Material::Init();
+		Material m = Material::Init( i.vPositionWithOffsetWs, i.vPositionSs );
 
 		m.Albedo = GammaToLinear( albedo );
-		m.Emission = GammaToLinear( baked ) * ( any( albedo ) ? ScreenSpaceAmbientOcclusion::Sample( i.vPositionSs ) : 1.0 );
+		m.Emission = GammaToLinear( baked ) * ScreenSpaceAmbientOcclusion::Sample( i.vPositionSs );
 		m.Normal = normalize( i.vNormalWs );
 		m.Roughness = 1.0;
 		m.Metalness = 0.0;
-		m.AmbientOcclusion = occlusion;
+		m.AmbientOcclusion = 0.0;
 		m.Opacity = 1.0;
 		m.TextureCoords = i.vTextureCoords.xy;
 
-		return Finish( ShadingModelStandard::Shade( i, m ), baked );
+		return Finish( ShadingModelStandard::Shade( m ) );
 	}
 
 	float4 g_vFog < Attribute( "Fog" ); Default4( 0.0, 0.0, 0.0, 0.0 ); >;
@@ -433,7 +432,7 @@ PS
 
 			float3 decalLight = Lightmap( i.vTextureCoords.zw, (int2)i.vLightmapBlock ) * ( 128.0 / 192.0 );
 
-			float3 decalColor = saturate( decal.rgb * decalLight + decalLight * decal.rgb );
+			float3 decalColor = saturate( decal.rgb * decalLight * 2.0 );
 
 			#if D_RENDER_MODE == kRenderNormal
 				decalColor = WaterFog( decalColor, i.vPositionWithOffsetWs );
@@ -459,17 +458,17 @@ PS
 		#endif
 
 		#if D_RENDER_MODE == kRenderTransAlpha
-			if ( albedo.a <= kAlphaMin )
+			if ( albedo.a <= kAlphaReference )
 				discard;
 		#endif
 
 		float3 lightmap = Lightmap( i.vTextureCoords.zw, (int2)i.vLightmapBlock ) * ( 128.0 / 192.0 );
-		float3 diffuse = albedo.rgb * lightmap + lightmap * albedo.rgb;
+		float3 diffuse = albedo.rgb * lightmap * 2.0;
 
 		#if D_RENDER_MODE == kRenderNormal
-			return Standard( i, albedo.rgb, WaterFog( saturate( diffuse ), i.vPositionWithOffsetWs ), 0.0 );
+			return Standard( i, albedo.rgb, WaterFog( saturate( diffuse ), i.vPositionWithOffsetWs ) );
 		#else
-			return Standard( i, albedo.rgb, saturate( diffuse ), 0.0 );
+			return Standard( i, albedo.rgb, saturate( diffuse ) );
 		#endif
 	}
 }

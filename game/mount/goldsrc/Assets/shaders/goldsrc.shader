@@ -50,6 +50,8 @@ PS
 {
 	#include "common/pixel.hlsl"
 
+	RenderState( AlphaToCoverageEnable, false );
+
 	StaticCombo( S_MASKED, F_MASKED, Sys( ALL ) );
 	StaticCombo( S_MODE_DEPTH, 0..1, Sys( ALL ) );
 	DynamicCombo( D_GAMMA_SPACE, 0..1, Sys( ALL ) );
@@ -82,7 +84,7 @@ PS
 	CreateInputTexture2D( Color, Linear, 8, "None", "_color", ",0/,0/0", Default4( 1.00, 1.00, 1.00, 1.00 ) );
 	Texture2D g_tColor < Channel( RGBA, Box( Color ), Linear ); OutputFormat( RGBA8888 ); SrgbRead( false ); >;
 
-	static const float kAlphaMin = 0.25;
+	static const float kAlphaReference = 0.25;
 
 	float3 GammaToLinear( float3 color )
 	{
@@ -103,11 +105,11 @@ PS
 		float4 albedo = SampleColor( g_tColor, i.vTextureCoords.xy );
 
 		#if S_MASKED
-			if ( albedo.a <= kAlphaMin )
+			if ( albedo.a <= kAlphaReference )
 				discard;
 		#endif
 
-		Material m = Material::Init();
+		Material m = Material::Init( i.vPositionWithOffsetWs, i.vPositionSs );
 
 		m.Albedo = GammaToLinear( albedo.rgb );
 		m.Normal = normalize( i.vNormalWs );
@@ -117,7 +119,7 @@ PS
 		m.Opacity = 1.0;
 		m.TextureCoords = i.vTextureCoords.xy;
 
-		float4 color = ShadingModelStandard::Shade( i, m );
+		float4 color = ShadingModelStandard::Shade( m );
 
 		#if D_GAMMA_SPACE
 			if ( !DepthNormals::WantsDepthNormals() && !g_bWireframeMode && !ToolsVis::WantsToolsVis() )

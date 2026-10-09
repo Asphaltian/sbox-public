@@ -38,7 +38,6 @@ COMMON
 	DynamicCombo( D_RENDER_MODE, 0..5, Sys( ALL ) );
 
 	float g_flBlend < Attribute( "Blend" ); Default( 1.0 ); >;
-	float g_flStudioLight < Attribute( "StudioLight" ); Default( 0.0 ); >;
 }
 
 struct VertexInput
@@ -244,6 +243,8 @@ PS
 {
 	#include "common/pixel.hlsl"
 
+	RenderState( AlphaToCoverageEnable, false );
+
 	StaticCombo( S_ADDITIVE, F_ADDITIVE, Sys( ALL ) );
 	StaticCombo( S_MASKED, F_MASKED, Sys( ALL ) );
 	StaticCombo( S_MODE_DEPTH, 0..1, Sys( ALL ) );
@@ -331,47 +332,45 @@ PS
 		return lerp( low, high, step( 0.0031308, color ) );
 	}
 
-	float4 Finish( float4 color, float3 source )
+	float4 Finish( float4 color )
 	{
 		#if D_GAMMA_SPACE
 			if ( !DepthNormals::WantsDepthNormals() && !g_bWireframeMode && !ToolsVis::WantsToolsVis() )
-				color.rgb = source + ( LinearToGamma( color.rgb ) - LinearToGamma( GammaToLinear( source ) ) );
+				color.rgb = LinearToGamma( color.rgb );
 		#endif
 
 		return color;
 	}
 
-	float4 Standard( PixelInput i, float3 albedo, float3 baked, float occlusion )
+	float4 Standard( PixelInput i, float3 albedo, float3 baked )
 	{
-		Material m = Material::Init();
+		Material m = Material::Init( i.vPositionWithOffsetWs, i.vPositionSs );
 
 		m.Albedo = GammaToLinear( albedo );
-		m.Emission = GammaToLinear( baked ) * ( any( albedo ) ? ScreenSpaceAmbientOcclusion::Sample( i.vPositionSs ) : 1.0 );
+		m.Emission = GammaToLinear( baked );
 		m.Normal = normalize( i.vNormalWs );
 		m.Roughness = 1.0;
 		m.Metalness = 0.0;
-		m.AmbientOcclusion = occlusion;
+		m.AmbientOcclusion = 0.0;
 		m.Opacity = 1.0;
 		m.TextureCoords = i.vTextureCoords.xy;
 
-		return Finish( ShadingModelStandard::Shade( i, m ), baked );
+		#if !S_ADDITIVE
+			m.Emission *= ScreenSpaceAmbientOcclusion::Sample( i.vPositionSs );
+		#endif
+
+		return Finish( ShadingModelStandard::Shade( m ) );
 	}
 
 	float4 Scene( PixelInput i, float3 albedo, float alpha )
 	{
 		float3 lit = WaterFog( saturate( albedo * i.vVertexColor.rgb ), i.vPositionWithOffsetWs );
-		float4 color;
 
 		#if S_ADDITIVE
-			color = Standard( i, float3( 0.0, 0.0, 0.0 ), lit, 0.0 );
-		#else
-			if ( g_flStudioLight > 0.0 )
-				color = Standard( i, albedo, lit, 0.0 );
-			else
-				color = Standard( i, albedo, float3( 0.0, 0.0, 0.0 ), 1.0 );
+			albedo = float3( 0.0, 0.0, 0.0 );
 		#endif
 
-		return float4( color.rgb, alpha );
+		return float4( Standard( i, albedo, lit ).rgb, alpha );
 	}
 
 	float4 MainPs( PixelInput i ) : SV_Target0
