@@ -85,11 +85,10 @@ internal sealed class StandardPipeline
 		// Clear colour, depth and stencil
 		//
 		{
-			var layer = NativeLayers.Add( view, "Clear Color Depth Stencil", viewport, default, color, depth, colorSpace,
-				LayerFlags.NeverRemove | LayerFlags.DiscardColorBuffers | LayerFlags.DiscardDepthStencilBuffer | LayerFlags.ClearWholeTargetViewportSize );
-			layer.m_nClearFlags = setup.m_nClearFlags;
+			var layer = view.AddClearLayer( "Clear Color Depth Stencil", viewport, setup.m_nClearFlags, default );
+			layer.SetOutput( color, depth, colorSpace );
+			layer.m_nLayerFlags |= LayerFlags.NeverRemove | LayerFlags.DiscardColorBuffers | LayerFlags.DiscardDepthStencilBuffer | LayerFlags.ClearWholeTargetViewportSize;
 			layer.SetClearColor( setup.m_vClearColor, 0 );
-			layer.AddObjectFlagsExcludedMask( NativeLayers.AllObjects );
 		}
 
 		var quadOverdraw = QuadOverdraw.IsOn( view );
