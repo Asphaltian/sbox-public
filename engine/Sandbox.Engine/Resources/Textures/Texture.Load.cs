@@ -154,7 +154,7 @@ public partial class Texture
 
 	internal static Texture TryToLoad( BaseFileSystem filesystem, string filepath, bool warnOnMissing = true )
 	{
-		if ( Application.IsUnitTest )
+		if ( Application.IsUnitTest && !Graphics.IsAvailable )
 			return null;
 
 		// if no filesystem provided
