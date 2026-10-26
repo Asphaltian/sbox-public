@@ -191,5 +191,16 @@ internal ref struct CameraRenderer
 
 			Native.AddSceneWorld( world );
 		}
+
+		if ( config.EnableDebugOverlays == false )
+			return;
+
+		foreach ( var world in camera.DebugWorlds )
+		{
+			if ( world is null ) continue;
+			if ( world == _world || camera.Worlds.Contains( world ) ) continue;
+
+			Native.AddSceneWorld( world );
+		}
 	}
 }

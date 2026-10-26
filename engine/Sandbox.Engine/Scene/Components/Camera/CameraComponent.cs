@@ -408,11 +408,12 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		camera.World = Scene.SceneWorld;
 		camera.ClearFlags = ClearFlags;
 		camera.Worlds.Clear();
-		camera.Worlds.Add( Scene.DebugSceneWorld );
+		camera.DebugWorlds.Clear();
+		camera.DebugWorlds.Add( Scene.DebugSceneWorld );
 
 		// Also render any active gizmos
 		if ( Gizmo.Active is not null )
-			camera.Worlds.Add( Gizmo.Active.World );
+			camera.DebugWorlds.Add( Gizmo.Active.World );
 
 		// A camera (such as the editor viewport) might not want to take render tags into account
 		// from an existing camera source

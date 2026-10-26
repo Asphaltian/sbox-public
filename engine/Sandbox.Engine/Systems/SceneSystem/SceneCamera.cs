@@ -352,6 +352,12 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	/// </summary>
 	public HashSet<SceneWorld> Worlds => _worlds;
 
+	/// <summary>
+	/// Worlds holding debug drawing and editor gizmos. Views render them unless
+	/// <see cref="ViewSetup.EnableDebugOverlays"/> is false, which renders the game only.
+	/// </summary>
+	internal HashSet<SceneWorld> DebugWorlds { get; } = new();
+
 	Transform _transform = new Transform();
 
 	/// <summary>

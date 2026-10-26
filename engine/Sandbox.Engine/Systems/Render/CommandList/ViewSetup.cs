@@ -112,8 +112,9 @@ public struct ViewSetup
 	public bool? EnableUI;
 
 	/// <summary>
-	/// Whether engine debug overlays should be rendered in this view. Null inherits the camera's setting.
-	/// This controls engine overlays, not scene geometry such as editor gizmos.
+	/// Whether debug drawing is rendered in this view: engine overlays, editor gizmos and the scene's
+	/// debug world. False renders the game only. Null keeps the debug worlds and inherits the camera's
+	/// engine overlay setting.
 	/// </summary>
 	public bool? EnableDebugOverlays;
 
