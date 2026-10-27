@@ -13,6 +13,8 @@ internal sealed class StandardPipeline
 {
 	readonly EarlyPostProcessLayer earlyCompute = new( PostProcessQueue.AsyncCompute );
 	readonly EarlyPostProcessLayer earlyGraphics = new( PostProcessQueue.Graphics );
+	readonly ScreenSpaceReflectionsLayer screenSpaceReflections = new();
+	readonly ScreenSpaceReflectionsHistoryLayer screenSpaceReflectionsHistory = new();
 
 	/// <summary>
 	/// The slice of the depth range game overlays draw in, at the near end (reverse-Z): <c>DEPTH_RANGE_GAME_OVERLAYS</c>.
@@ -131,9 +133,13 @@ internal sealed class StandardPipeline
 			if ( prepassCulled ) AddLateDepthNormalPrepass( setup, viewport, normals, depth );
 		}
 
+		// Screen-space reflections are part of every camera view; reflections, cube captures and child views go without
+		var reflections = hooks && !reflection && !capture && !view.GetParent().IsValid ? camera?.ScreenSpaceReflections : null;
+		var earlyGraphicsEffects = camera?.HasEarlyPostProcess( Stage.AfterDepthPrepass, PostProcessQueue.Graphics ) == true;
+
 		var overlap = RenderPipeline.OverlapReflections && hooks && view.GetPostProcessEnabled()
 			&& camera?.HasEarlyPostProcess( Stage.AfterDepthPrepass, PostProcessQueue.AsyncCompute ) == true
-			&& camera.HasEarlyPostProcess( Stage.AfterDepthPrepass, PostProcessQueue.Graphics )
+			&& (reflections is not null || earlyGraphicsEffects)
 			&& RenderDeviceManager.SupportsAsyncCompute();
 		camera?.ScheduleEarlyPostProcess( Stage.AfterDepthPrepass, overlap );
 
@@ -143,15 +149,30 @@ internal sealed class StandardPipeline
 		depthDownsample.SignalPostProcess = overlap;
 		var depthLayer = depthDownsample.AddToView( view, viewport );
 
+		ISceneLayer computeLayer = default;
 		if ( overlap )
 		{
 			earlyCompute.Msaa = msaa;
-			var computeLayer = earlyCompute.AddToView( view, viewport );
+			computeLayer = earlyCompute.AddToView( view, viewport );
 			computeLayer.AddSemaphoreDependency( depthLayer );
 
-			earlyGraphics.Msaa = msaa;
-			earlyGraphics.AddToView( view, viewport );
+			if ( earlyGraphicsEffects )
+			{
+				earlyGraphics.Msaa = msaa;
+				earlyGraphics.AddToView( view, viewport );
+			}
+		}
 
+		// Graphics queue, beside any async compute effects
+		if ( reflections is not null )
+		{
+			screenSpaceReflections.Pass = reflections;
+			screenSpaceReflections.Msaa = msaa;
+			screenSpaceReflections.AddToView( view, viewport );
+		}
+
+		if ( overlap )
+		{
 			// Each binary semaphore has one consumer. Ordinary hooks and forward draws see both results.
 			var ready = view.AddLabelLayer( "Post processing ready" );
 			ready.m_nLayerFlags |= LayerFlags.NeverRemove;
@@ -238,6 +259,14 @@ internal sealed class StandardPipeline
 		if ( dynamicObjects )
 		{
 			NativeLayers.AddOpaque( setup, "Dynamic Opaque Forward", "Dynamic Opaque Forward Fade", dynamicObjects: true, occlusionCulled );
+		}
+
+		// The lit scene, as next frame's reflection history
+		if ( reflections is not null )
+		{
+			screenSpaceReflectionsHistory.Pass = reflections;
+			screenSpaceReflectionsHistory.Setup( color, depth );
+			screenSpaceReflectionsHistory.AddToView( view, viewport );
 		}
 
 		if ( hooks ) HookLayers.Add( view, "Managed: AfterOpaque", Stage.AfterOpaque, viewport, color, depth );

@@ -245,6 +245,13 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 				OcclusionHistory = null;
 			}
 
+			if ( _reflections != null )
+			{
+				// A view queued to render may still trace with it
+				EngineLoop.DisposeAtFrameEnd( _reflections );
+				_reflections = null;
+			}
+
 			// Release native CStrongHandle copies held by texture tracking
 			// in our RenderAttributes. Without this, the handles survive until
 			// the RenderAttributes finalizer runs which may be after the
@@ -263,6 +270,23 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 
 
 	internal int _cameraId;
+
+	ScreenSpaceReflectionsPass _reflections;
+
+	/// <summary>
+	/// The screen-space reflections this camera's views render: part of every camera, or null when the graphics settings
+	/// turn them off (<see cref="ScreenSpaceReflectionsPass.IsEnabled"/>).
+	/// </summary>
+	internal ScreenSpaceReflectionsPass ScreenSpaceReflections => ScreenSpaceReflectionsPass.IsEnabled ? _reflections : null;
+
+	/// <summary>
+	/// Make the pass while reflections are on. On the main thread: it makes its shaders here, which a render job can't.
+	/// </summary>
+	internal void UpdateScreenSpaceReflections()
+	{
+		if ( ScreenSpaceReflectionsPass.IsEnabled )
+			_reflections ??= new();
+	}
 
 	internal void InitCommon()
 	{

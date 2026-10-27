@@ -303,18 +303,19 @@ internal static partial class GameScenes
 	/// the forward pass applies its result through a pipeline texture slot. Its history is the camera's, so compare it
 	/// isolated (<c>scenelab.exe -parity -isolated</c>).
 	/// </summary>
-	public static Scene AmbientOcclusion() => OcclusionStage( ao: true, ssr: false );
+	public static Scene AmbientOcclusion() => OcclusionStage( ao: true );
 
 	/// <summary>
-	/// Screen space reflections (<c>ScreenSpaceReflections</c>): the ambient occlusion scene reflected in its metal floor.
-	/// SSR reads the prepass's normals and roughness, last frame's colour and its own history. Compare it isolated.
+	/// Screen space reflections (<c>ScreenSpaceReflectionsPass</c>): the ambient occlusion scene reflected in its metal floor.
+	/// SSR reads the prepass's normals and roughness, last frame's colour and its own history. Compare it isolated. Every
+	/// camera renders it now, so the other occlusion scenes have it too.
 	/// </summary>
-	public static Scene ScreenSpaceReflections() => OcclusionStage( ao: false, ssr: true );
+	public static Scene ScreenSpaceReflections() => OcclusionStage( ao: false );
 
 	/// <summary>Both independent prepass effects in a small scene, without enough draws to enable worker recording.</summary>
-	public static Scene OcclusionAndReflections() => OcclusionStage( ao: true, ssr: true );
+	public static Scene OcclusionAndReflections() => OcclusionStage( ao: true );
 
-	static Scene OcclusionStage( bool ao, bool ssr )
+	static Scene OcclusionStage( bool ao )
 	{
 		var scene = Stage( out var camera, new Vector3( -200, -150, 110 ), new Vector3( 20, 20, 20 ) );
 		using var _ = scene.Push();
@@ -331,7 +332,6 @@ internal static partial class GameScenes
 		OnFloor( Prop( "Small Box", "models/dev/box.vmdl", new Vector3( 10, -40, 0 ), new Color( 0.4f, 0.9f, 0.4f ), scale: 0.3f ) );
 
 		if ( ao ) camera.GameObject.Components.Create<Sandbox.AmbientOcclusion>();
-		if ( ssr ) camera.GameObject.Components.Create<Sandbox.ScreenSpaceReflections>();
 		return scene;
 	}
 

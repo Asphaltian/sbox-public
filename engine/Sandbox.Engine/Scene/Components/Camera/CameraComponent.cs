@@ -429,6 +429,7 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		camera.DebugMode = DebugMode;
 		camera.WireframeMode = WireframeMode;
 		camera.EnablePostProcessing = EnablePostProcessing;
+		camera.UpdateScreenSpaceReflections();
 		camera.BackgroundColor = ClearFlags.Contains( ClearFlags.Color ) ? BackgroundColor : Color.Transparent;
 
 		CopyPostProcessing( camera, applyCameraEffects: false );
@@ -486,7 +487,7 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		// Set with the hooks: a view decides its G-buffer from the camera whose lists it runs (the editor viewport runs the
 		// main camera's). Unknown post effects and custom command lists may sample normals, so only omit them for an empty
 		// stack. Scene attributes can force the G-buffer for custom material consumers outside those stages.
-		camera.Attributes.Set( "NeedsDepthNormals", WantsDepthNormals() );
+		camera.Attributes.Set( "NeedsDepthNormals", WantsDepthNormals() || camera.ScreenSpaceReflections is not null );
 
 		//
 		// Hack because I don't want this to have to be on a camera. This
