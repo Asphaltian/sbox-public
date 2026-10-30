@@ -68,6 +68,9 @@ internal sealed class StandardPipeline
 		var dynamicObjects = setup.m_bRenderDynamicObjects;
 		var hooks = setup.m_bManagedHooks;
 
+		// Reflections render cheaper (ViewSetup.Reflection): nothing samples their bloom or exposure
+		var reflection = viewAttributes.GetBoolValue( "IsReflection", false );
+
 		// Cube captures (envmap probes, DDGI) see the world only: no viewmodels, debug overlays or objects drawn over the UI
 		var capture = view.GetRenderTargetArrayIndex() >= 0;
 		if ( capture )
@@ -107,6 +110,9 @@ internal sealed class StandardPipeline
 		viewAttributes.SetIntValue( "ShadowFilterQuality", ShadowMapper.ShadowFilter );
 
 		var camera = IManagedCamera.FindById( view.m_ManagedCameraId ) as SceneCamera;
+
+		// First, so the reflection records alongside this view's passes
+		PlanarReflections.AddToView( view, camera );
 
 		var occlusionCulled = RenderPipeline.OcclusionCulling && setup.m_bRenderOpaque && !setup.m_bWireframe && !quadOverdraw;
 		var occlusionHistory = occlusionCulled ? NativeOcclusionCull.HistoryFor( camera ) : null;
@@ -167,6 +173,7 @@ internal sealed class StandardPipeline
 		}
 
 		// Bloom objects: effects that only show up in bloom, like a ghost effect
+		if ( !reflection )
 		{
 			var quarterViewport = viewport / 4;
 			var bloom = SharedPasses.BloomTarget( (int)quarterViewport.Rect.Width, (int)quarterViewport.Rect.Height );
@@ -364,7 +371,7 @@ internal sealed class StandardPipeline
 
 		if ( hooks ) HookLayers.Add( view, "Managed: BeforePostProcessing", Stage.BeforePostProcess, viewport, color, depth );
 
-		setup.AddAutoExposure( exposureColor, exposureViewport );
+		if ( !reflection ) setup.AddAutoExposure( exposureColor, exposureViewport );
 
 		if ( hooks ) HookLayers.Add( view, "Managed: Tonemapping", Stage.Tonemapping, viewport, color, depth );
 

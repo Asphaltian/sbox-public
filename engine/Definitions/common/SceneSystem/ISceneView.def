@@ -39,6 +39,7 @@ native class ISceneView as NativeEngine.ISceneView
 	ISceneView GetParent();
 	int GetPriority();
 	void SetPriority( int nPriority );
+	void SetIssueSortIndex( int nIndex );
 
 	inline CFrustum GetFrustum()
 	{

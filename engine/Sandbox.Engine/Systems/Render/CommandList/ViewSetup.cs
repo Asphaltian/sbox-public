@@ -122,6 +122,13 @@ public struct ViewSetup
 	/// If you're rendering a subview this will allow the renderer to find the same view again next frame
 	/// </summary>
 	public int ViewHash;
+
+	/// <summary>
+	/// Render as a reflection, which nobody looks at closely: no planar reflections of its own, a depth-only prepass,
+	/// and no contact shadows, volumetric fog, auto exposure or bloom objects. It's unshadowed unless
+	/// <c>r.reflections.shadows</c> is on.
+	/// </summary>
+	internal bool Reflection;
 }
 
 /// <summary>

@@ -940,6 +940,49 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	}
 
 
+	/// <summary>
+	/// Submit a view into colour and optional depth textures, as a child of <paramref name="parent"/> when it's valid,
+	/// and copy its resolved projection and viewport for whatever samples it.
+	/// </summary>
+	internal bool RenderToTexture( Texture target, Texture depthTarget, ISceneView parent, in ViewSetup config, string name, out ViewData viewData )
+	{
+		viewData = default;
+
+		using var setup = new CameraRenderer( name, _cameraId );
+
+		// The lock only covers reading the scene camera into this call's renderer. A top-level render
+		// waits for the whole frame inside the native call, and a child view rendered through this
+		// camera from the render thread needs the lock during that wait.
+		lock ( this )
+		{
+			setup.Configure( this, config );
+		}
+
+		//
+		// Adds the views to the scene system
+		//
+		var rendered = setup.Native.RenderToTexture( target.native, parent, depthTarget?.native ?? default );
+
+		if ( rendered )
+		{
+			var depthRange = setup.Native.RenderedDepthRange;
+			viewData = new ViewData
+			{
+				IsValid = true,
+				ProjectionToView = setup.Native.RenderedProjectionToView,
+				Viewport = setup.Native.RenderedViewport,
+				DepthRange = new Vector2( depthRange.x, depthRange.y ),
+				DepthUvScaleBias = new Vector4(
+					setup.Native.FlipX ? -1 : 1, setup.Native.FlipY ? -1 : 1,
+					setup.Native.FlipX ? 1 : 0, setup.Native.FlipY ? 1 : 0 )
+			};
+		}
+
+		setup.Native.ClearSceneWorlds();
+
+		return rendered;
+	}
+
 	internal void RenderToBitmap( Bitmap bitmap, in ViewSetup config = default )
 	{
 		if ( !bitmap.IsValid() )

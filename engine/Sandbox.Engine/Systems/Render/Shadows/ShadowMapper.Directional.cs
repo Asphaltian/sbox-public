@@ -346,8 +346,9 @@ internal partial class ShadowMapper
 		gpuShadowData.Color = new Vector4( light.Color, light.FogStrength );
 		gpuShadowData.Direction = new Vector4( light.Direction, 0 );
 
-		// 3D skybox is fully static with baked light, keep the directional light for shading but skip shadow cascades
-		if ( View.IsSkybox )
+		// 3D skybox is fully static with baked light, keep the directional light for shading but skip shadow cascades.
+		// Reflections without shadows skip them too, so they don't wait on this frame's cascades.
+		if ( View.IsSkybox || View.NoShadows )
 		{
 			gpuShadowData.CascadeCount = 0;
 			GPUDirectionalLightData = gpuShadowData;
@@ -357,7 +358,8 @@ internal partial class ShadowMapper
 		float viewportArea = View.ViewportSize.x * View.ViewportSize.y;
 		var cameraPosition = View.CameraPosition;
 
-		if ( LastCascades.Frame == Application.FrameCount && LastCascades.Light == light.Key && viewportArea <= LastCascades.ViewportArea
+		// A reflection's mirrored camera neither reuses another view's cascades nor shares its own
+		if ( !View.IsReflection && LastCascades.Frame == Application.FrameCount && LastCascades.Light == light.Key && viewportArea <= LastCascades.ViewportArea
 			&& LastCascades.ExcludedFlags == excludeFlags
 			&& cameraPosition.DistanceSquared( LastCascades.CameraPosition ) <= LastCascades.RadiusSquared )
 		{
@@ -454,7 +456,7 @@ internal partial class ShadowMapper
 		gpuShadowData.InverseShadowMapSize = 1.0f / shadowmapSize;
 
 		float outerRadius = cascadeCount > 0 ? cascades[cascadeCount - 1].SphereRadius : 0f;
-		LastCascades = new CascadeCache
+		if ( !View.IsReflection ) LastCascades = new CascadeCache
 		{
 			Frame = Application.FrameCount,
 			Light = light.Key,

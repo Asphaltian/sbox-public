@@ -150,6 +150,7 @@ public class SettingsCatalog
 		["TextureQuality"] = "gfx.texture",
 		["ShadowQuality"] = "gfx.shadows",
 		["VolumetricFogQuality"] = "gfx.fog",
+		["WaterQuality"] = "gfx.water",
 		["AntiAliasMode"] = "gfx.aa",
 		["AntiAliasQuality"] = "gfx.msaa_samples",
 		["AmbientOcclusionQuality"] = "gfx.ao",
@@ -446,6 +447,19 @@ public class SettingsCatalog
 			AppliesRenderSettings = true,
 			Read = () => Render.VolumetricFogQuality.ToString(),
 			Write = value => Render.VolumetricFogQuality = ToEnum<VolumetricFogQuality>( value )
+		} );
+
+		Items.Add( new SettingItem
+		{
+			Id = "gfx.water",
+			Category = "graphics",
+			Section = "#menu.settings.quality",
+			Title = "#menu.settings.water",
+			Description = "#menu.settings.gfx.water.description",
+			Options = Levels( WaterQuality.Low, WaterQuality.Medium, WaterQuality.High, WaterQuality.Ultra ),
+			AppliesRenderSettings = true,
+			Read = () => Render.WaterQuality.ToString(),
+			Write = value => Render.WaterQuality = ToEnum<WaterQuality>( value )
 		} );
 
 		Items.Add( new SettingItem

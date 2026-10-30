@@ -892,39 +892,7 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 			InitializeRendering();
 		}
 
-		using var setup = new CameraRenderer( $"{GameObject.Name}.RenderToTexture", sceneCamera._cameraId );
-
-		// The lock only covers reading the scene camera into this call's renderer. A top-level render
-		// waits for the whole frame inside the native call, and a child view rendered through this
-		// camera from the render thread needs the lock during that wait.
-		lock ( this )
-		{
-			setup.Configure( sceneCamera, config );
-		}
-
-		//
-		// Adds the views to the scene system
-		//
-		var rendered = setup.Native.RenderToTexture( target.native, Graphics.SceneView, depthTarget?.native ?? default );
-
-		if ( rendered )
-		{
-			var depthRange = setup.Native.RenderedDepthRange;
-			viewData = new ViewData
-			{
-				IsValid = true,
-				ProjectionToView = setup.Native.RenderedProjectionToView,
-				Viewport = setup.Native.RenderedViewport,
-				DepthRange = new Vector2( depthRange.x, depthRange.y ),
-				DepthUvScaleBias = new Vector4(
-					setup.Native.FlipX ? -1 : 1, setup.Native.FlipY ? -1 : 1,
-					setup.Native.FlipX ? 1 : 0, setup.Native.FlipY ? 1 : 0 )
-			};
-		}
-
-		setup.Native.ClearSceneWorlds();
-
-		return rendered;
+		return sceneCamera.RenderToTexture( target, depthTarget, Graphics.SceneView, config, $"{GameObject.Name}.RenderToTexture", out viewData );
 	}
 
 	/// <summary>

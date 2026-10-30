@@ -167,4 +167,3 @@ public class CameraClearRenderingTests
 			Assert.Inconclusive( "Requires SBOX_TEST_GRAPHICS=1." );
 	}
 }
-
