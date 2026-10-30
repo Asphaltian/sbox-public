@@ -275,6 +275,7 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 		Attributes.Set( "indirectLighting", true );
 		Attributes.Set( "renderSun", true );
 		Attributes.Set( "drawShadows", true );
+		Attributes.Set( "ParticleLighting", ParticleLightingSystem.Unlit );
 
 		FieldOfView = 70.0f;
 

@@ -1093,6 +1093,43 @@ internal static partial class GameScenes
 	}
 
 	/// <summary>
+	/// Dense smoke: 1500 big lit smoke sprites overlapping in the fog scene with an 8x8 grid of point lights, every eighth one
+	/// shadowed, for sprite lighting under heavy overdraw. Placed from a fixed seed, so captures repeat.
+	/// </summary>
+	public static Scene DenseSmoke()
+	{
+		var scene = VolumetricFog();
+		using var _ = scene.Push();
+
+		for ( int i = 0; i < 64; i++ )
+		{
+			var light = new GameObject( true, $"Smoke Light {i}" );
+			light.WorldPosition = new Vector3( (i % 8 - 3.5f) * 45, (i / 8 - 3.5f) * 45, 30 + (i % 3) * 30 );
+			var point = light.Components.Create<PointLight>();
+			point.LightColor = new ColorHsv( i * 47 % 360, 0.7f, 1 ).ToColor() * 0.5f;
+			point.Radius = 90;
+			point.Shadows = i % 8 == 0;
+		}
+
+		var sprite = Sprite.FromTexture( Texture.Load( "textures/particles/smoke/smoke_loop_a.vtex" ) );
+		var random = new Random( 1 );
+		for ( int i = 0; i < 1500; i++ )
+		{
+			var go = new GameObject( true, $"Smoke {i}" );
+			go.WorldPosition = new Vector3( random.Float( -170, 170 ), random.Float( -170, 170 ), random.Float( 10, 140 ) );
+			var renderer = go.Components.Create<SpriteRenderer>();
+			renderer.Sprite = sprite;
+			renderer.Size = random.Float( 50, 110 );
+			renderer.Color = new Color( 0.8f, 0.8f, 0.8f, 0.3f );
+			renderer.AlphaCutoff = 0;
+			renderer.Lighting = true;
+			renderer.IsSorted = true;
+		}
+
+		return scene;
+	}
+
+	/// <summary>
 	/// The volume moved, tinted and thinned, through its component.
 	/// </summary>
 	public static void ChangeVolumetricFog( Scene scene )
