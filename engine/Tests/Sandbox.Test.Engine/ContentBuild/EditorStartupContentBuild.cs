@@ -418,6 +418,67 @@ public class EditorStartupContentBuild
 	}
 
 	/// <summary>
+	/// A native load or reload must not compile inside the resource loader. The normal content build must still
+	/// compile and publish the edit afterwards, including when that compile reads an animated model's base model.
+	/// </summary>
+	[TestMethod, TestCategory( "Slow" )]
+	[DataRow( false )]
+	[DataRow( true )]
+	public void LoadingAModelWithABaseModelDefersCompilation( bool reload )
+	{
+		if ( Environment.GetEnvironmentVariable( "SBOX_EDITOR_TESTS" ) is null )
+			Assert.Inconclusive( "Opens an editor: set SBOX_EDITOR_TESTS=1 to run" );
+
+		using var project = new EditorProject();
+		project.Copy( Sources.ImageA, "materials/a.tga" );
+		project.Copy( Sources.ImageB, "materials/b.tga" );
+		project.Write( "materials/a.vmat", Sources.Material( "TextureColor", "materials/a.tga" ) );
+		project.Write( "materials/b.vmat", Sources.Material( "TextureColor", "materials/b.tga" ) );
+		project.Copy( $"{Sources.BonnetFolder}/easter_bonnet.fbx", "models/bonnet.fbx" );
+		project.Copy( $"{Sources.BonnetFolder}/easter_bonnet_citizen_idle_anim.fbx", "models/idle.fbx" );
+		project.Write( "models/base.vmdl", Sources.Mesh( "models/bonnet.fbx", "materials/a.vmat" ) );
+		project.Write( "models/derived.vmdl", Sources.MeshAnimated( "models/bonnet.fbx", "materials/a.vmat", "models/base.vmdl", "models/idle.fbx" ) );
+		var source = Path.Combine( project.Assets, "models", "derived.vmdl" );
+		var output = source + "_c";
+
+		var live = project.Open( $$"""
+			var reload = {{(reload ? "true" : "false")}};
+			if ( reload )
+			{
+				var model = Model.Load( "models/derived.vmdl" );
+				if ( model is null || model.IsError ) return "initial model failed";
+			}
+			var before = System.IO.File.GetLastWriteTimeUtc( @"{{output}}" );
+			var text = System.IO.File.ReadAllText( @"{{source}}" );
+			System.IO.File.WriteAllText( @"{{source}}", text.Replace( "materials/a.vmat", "materials/b.vmat" ) );
+			Editor.AssetSystem.RegisterFile( @"{{source}}" );
+			// Exercise the native load before yielding to the debounced content build.
+			if ( reload )
+			{
+				var resourceSystem = typeof( Model ).Assembly.GetType( "NativeEngine.g_pResourceSystem", true );
+				resourceSystem.GetMethod( "ReloadResource", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic )
+					.Invoke( null, new object[] { "models/derived.vmdl" } );
+			}
+			else
+			{
+				Model.Load( "models/derived.vmdl" );
+			}
+			if ( System.IO.File.GetLastWriteTimeUtc( @"{{output}}" ) != before ) return "compiled inside the resource load";
+			var timer = System.Diagnostics.Stopwatch.StartNew();
+			while ( timer.Elapsed.TotalSeconds < 60 )
+			{
+				if ( System.IO.File.GetLastWriteTimeUtc( @"{{output}}" ) != before ) return "deferred compile published";
+				await Task.Delay( 50 );
+			}
+			return "deferred compile did not publish";
+			""" );
+
+		StringAssert.Contains( live.Summary, $"Content local.{EditorProject.Ident}: 4 compiles, 0 failed", live.ToString() );
+		StringAssert.Contains( live.Live, "deferred compile published", live.ToString() );
+		StringAssert.Contains( live.Live, "Content build: 1 compiles", live.ToString() );
+	}
+
+	/// <summary>
 	/// A game resource whose source stops compiling still opens as it last compiled, so its editor can fix it, as on
 	/// master; building it still fails and publishes nothing.
 	/// </summary>
