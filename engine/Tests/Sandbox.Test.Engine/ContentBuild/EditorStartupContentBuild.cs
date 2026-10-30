@@ -205,7 +205,8 @@ public class EditorStartupContentBuild
 
 	/// <summary>
 	/// A project's own compiler, its code edited in an open editor: what it compiled stays as it is, and a source written
-	/// after the hotload compiles with the new code (the build's workers have it).
+	/// after the hotload compiles with the new code (the build's workers have it). An unchanged broken texture
+	/// isn't retried just because code hotloaded; the next asset edit still retries it.
 	/// </summary>
 	[TestMethod, TestCategory( "Slow" )]
 	public void ProjectCompilerEditedWhileOpenCompilesNewSourcesWithTheNewCode()
@@ -218,6 +219,7 @@ public class EditorStartupContentBuild
 		Directory.CreateDirectory( Path.GetDirectoryName( code ) );
 		File.WriteAllText( code, LiveGraphSource.Replace( "MARKER", "compiler 1" ) );
 		project.Write( "graphs/a.lvg", """{ "Name": "a" }""" );
+		project.Write( "textures/broken.vtex", "invalid texture" );
 		var a = Path.Combine( project.Assets, "graphs", "a.lvg_c" );
 		var b = Path.Combine( project.Assets, "graphs", "b.lvg_c" );
 
@@ -225,10 +227,18 @@ public class EditorStartupContentBuild
 			bool Marked( string path, string marker ) => System.IO.File.Exists( path ) && System.Text.Encoding.UTF8.GetString( System.IO.File.ReadAllBytes( path ) ).Contains( marker );
 			var before = Marked( @"{{a}}", "compiler 1" );
 			var written = System.IO.File.GetLastWriteTimeUtc( @"{{a}}" );
+			var contentBuild = typeof( Editor.AssetSystem ).Assembly.GetType( "Editor.EditorContentBuild" );
+			int BuildState( string name ) => (int)contentBuild.GetField( name, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic ).GetValue( null );
+			var generation = BuildState( "codeGeneration" );
+			var builtEpoch = BuildState( "builtEpoch" );
 
-			// New code, given time to hotload, then a new source
+			// Wait for the actual hotload, then check it did not schedule another content pass before editing an asset.
 			System.IO.File.WriteAllText( @"{{code}}", {{System.Text.Json.JsonSerializer.Serialize( LiveGraphSource.Replace( "MARKER", "compiler 2" ) )}} );
-			await Task.Delay( 20000 );
+			var hotload = System.Diagnostics.Stopwatch.StartNew();
+			while ( BuildState( "codeGeneration" ) == generation && hotload.ElapsedMilliseconds < 90000 ) await Task.Delay( 25 );
+			if ( BuildState( "codeGeneration" ) == generation ) return "code did not hotload";
+			if ( BuildState( "builtEpoch" ) != builtEpoch ) return "hotload scheduled a content rebuild";
+
 			System.IO.File.WriteAllText( @"{{project.Assets}}\graphs\b.lvg", "{ \"Name\": \"b\" }" );
 			var timer = System.Diagnostics.Stopwatch.StartNew();
 			while ( !Marked( @"{{b}}", "compiler 2" ) && timer.ElapsedMilliseconds < 120000 )
@@ -238,10 +248,10 @@ public class EditorStartupContentBuild
 			return $"built with 1 {before}, kept {kept}, new source with 2 {Marked( @"{{b}}", "compiler 2" )}";
 			""" );
 
-		StringAssert.Contains( live.Summary, $"Content local.{EditorProject.Ident}: 1 compiles, 0 failed", live.ToString() );
+		StringAssert.Contains( live.Summary, $"Content local.{EditorProject.Ident}: 2 compiles, 1 failed", live.ToString() );
 		StringAssert.Contains( live.Live, "built with 1 True, kept True, new source with 2 True", live.ToString() );
 		Assert.AreEqual( 1, Regex.Matches( live.Live, @"Content build: \d+ compiles" ).Count, live.ToString() );
-		Assert.AreEqual( 1, Regex.Matches( live.Live, @"Content build: 1 compiles, 0 adopted, 0 failed" ).Count, live.ToString() );
+		Assert.AreEqual( 1, Regex.Matches( live.Live, @"Content build: 2 compiles, 0 adopted, 1 failed" ).Count, live.ToString() );
 	}
 
 	/// <summary>

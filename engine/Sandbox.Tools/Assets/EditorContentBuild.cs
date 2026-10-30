@@ -273,13 +273,13 @@ internal static class EditorContentBuild
 
 	/// <summary>
 	/// Code changed (compilers and resource types may have come or gone): the next build runs on new workers with it.
-	/// What a changed compiler already made stays as it is; sources compiled from now on run the new code.
+	/// Code alone doesn't trigger a build or retry failed assets. New asset types are registered by ToolsDll, which
+	/// counts any newly recognized sources as content changes; sources compiled from now on run the new code.
 	/// </summary>
 	[EditorEvent.Hotload]
 	static void CodeChanged()
 	{
 		codeGeneration++;
-		builtEpoch = -1;
 		if ( incrementalBuild is { IsCompleted: false } ) cancellation?.Cancel();
 	}
 
