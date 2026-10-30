@@ -135,7 +135,7 @@ CS
 				continue;
 
 			const float3 vDirLocal = mul( float4( vToCameraWs, 0.0f ), EnvMapWorldToLocal( index ) ).xyz;
-			vCube = lerp( vCube, SampleEnvironmentMapLevel( vDirLocal, 1.0f, UniformIndex( index ) ), 1.0 - flDistAccumulated );
+			vCube = lerp( vCube, SampleEnvironmentMapLevel( vDirLocal, 1.0f, index, EnvMapTexture( asDynamicUniform( UniformIndex( index ) ) ) ), 1.0 - flDistAccumulated );
 
 			flDistAccumulated += RemapValClamped( flDistance, min( -flEdgeFeathering, 0.0f ), max( -flEdgeFeathering, 0.0f ), 0.0, 1.0 );
 			if ( flDistAccumulated >= 1.0 )
