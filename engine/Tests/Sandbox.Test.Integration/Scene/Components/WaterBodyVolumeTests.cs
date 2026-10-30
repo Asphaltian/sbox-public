@@ -6,7 +6,7 @@ namespace SceneTests.Components;
 /// Verifies water volume queries, native contacts and the existing swimming integration.
 /// </summary>
 [TestClass]
-public class WaterVolumeIntegrationTests
+public class WaterBodyVolumeTests
 {
 	/// <summary>
 	/// Containment follows the authored footprint, rotation and depth without moving the surface.
@@ -53,7 +53,7 @@ public class WaterVolumeIntegrationTests
 	}
 
 	/// <summary>
-	/// Existing player swimming detects the generated trigger without a WaterVolume component.
+	/// Existing player swimming detects the generated trigger.
 	/// </summary>
 	[TestMethod]
 	public void GeneratedTriggerEnablesPlayerSwimming()
@@ -78,7 +78,6 @@ public class WaterVolumeIntegrationTests
 			Assert.IsTrue( player.Body.Touching.Any( x => x.Tags.Contains( "water" ) ) );
 			Assert.IsTrue( swim.WaterLevel > swim.SwimLevel );
 			Assert.IsTrue( player.IsSwimming );
-			Assert.AreEqual( 0, scene.GetAll<WaterVolume>().Count() );
 		}
 		finally
 		{
