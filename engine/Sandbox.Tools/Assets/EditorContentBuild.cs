@@ -267,7 +267,8 @@ internal static class EditorContentBuild
 
 		compilerKey = key;
 		// The editor has a GPU, and its projects' image generators can copy compiled textures
-		compiler = new ResourceCompiler( EngineFileSystem.Root.GetFullPath( "bin/managed/contentworker.exe" ), new AssetTypeTable( EngineFileSystem.Root.GetFullPath( "bin/assettypes.txt" ) ), mounts, Compilers ) { MaxWorkers = Workers, Answer = ContentCompilerHost.Answer, RenderDevice = true };
+		var worker = OperatingSystem.IsWindows() ? "contentworker.exe" : "contentworker";
+		compiler = new ResourceCompiler( EngineFileSystem.Root.GetFullPath( $"bin/managed/{worker}" ), new AssetTypeTable( EngineFileSystem.Root.GetFullPath( "bin/assettypes.txt" ) ), mounts, Compilers ) { MaxWorkers = Workers, Answer = ContentCompilerHost.Answer, RenderDevice = true };
 		return compiler;
 	}
 
